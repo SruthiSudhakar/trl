@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pdb
 import copy
 import inspect
 import os
@@ -1079,10 +1080,10 @@ class GRPOTrainer(Trainer):
         has_images = "image" in inputs[0]
         if has_images:
             images = [example.get("image") for example in inputs]
-            kwargs = {"images": [[img] for img in images]}
+            kwargs = {"images": [img for img in images]}
             for prompt in prompts:
                 if isinstance(prompt, list):  # i.e., when using conversational data
-                    prepare_multimodal_messages(prompt, num_images=1)
+                    prepare_multimodal_messages(prompt, num_images=len(images[0]))
 
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
 
@@ -1796,8 +1797,17 @@ class GRPOTrainer(Trainer):
                     table["image"] = []
                     for img in self._logs["image"]:
                         if img is not None:
-                            # Convert images to wandb Image objects for proper visualization
-                            table["image"].append(wandb.Image(img))
+                            # Handle both single images and lists of images
+                            if isinstance(img, list):
+                                # If it's a list of images, take the first one for wandb logging
+                                # or create a grid/composite image if needed
+                                if len(img) > 0 and img[0] is not None:
+                                    table["image"].append(wandb.Image(img[0]))
+                                else:
+                                    table["image"].append(None)
+                            else:
+                                # Single image case
+                                table["image"].append(wandb.Image(img))
                         else:
                             table["image"].append(None)
 
@@ -1881,5 +1891,5 @@ class GRPOTrainer(Trainer):
             paper_title="DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models",
             paper_id="2402.03300",
         )
-
+        print('WANDB URL', wandb.run.url if is_wandb_available() and wandb.run is not None else 'NO WANDB')
         model_card.save(os.path.join(self.args.output_dir, "README.md"))

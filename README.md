@@ -206,3 +206,19 @@ pip install -e .[dev]
 ## License
 
 This repository's source code is available under the [Apache-2.0 License](LICENSE).
+
+
+## running grpo
+hf_trl/trl/examples/scripts/grpo_vlm.py
+python3 -m ensurepip --upgrade
+python3 -m pip install --upgrade pip setuptools wheel
+
+export HF_HUB_OFFLINE=0
+pip install -e .[dev]
+pip install peft
+pip install deepspeed
+pip install math-verify
+pip install latex2sympy2_extended
+pip install vllm
+pip install wandb
+pip install qwen_vl_utils
