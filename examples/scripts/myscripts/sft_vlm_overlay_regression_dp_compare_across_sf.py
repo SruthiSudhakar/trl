@@ -26,9 +26,8 @@
 """
 Image Overlay SFT Script for Task Completion Progress Regression - OPTIMIZED VERSION
 
-This script trains a VLM to analyze overlayed images from a robot demonstration
-where two frames are combined with different color channels (red/green) and
-predict the relative task completion progress between them.
+This script trains a VLM to analyze side-by-side images from a robot demonstration
+where two frames are put side-by-side and predict the relative task completion progress between them.
 
 Optimizations:
 - Image caching to avoid repeated disk I/O
@@ -41,8 +40,8 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --num_processes=8 --gpu_i
     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/myscripts/sft_vlm_overlay_regression_dp_compare_across_sf.py \
     --model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
-    --output_dir "outputs/dec19/sft-side_by_side-regression-Qwen2.5-VL-7B-Instruct_$(date +%Y%m%d_%H%M%S)" \
-    --base_dataset_path /workspace/guided_diffusion_policy/data/outputs/dec4/2025.12.03/22.38.27_train_diffusion_unet_clip/checkpoints/epoch_70_step_4188/dec18_PnPStoveToCounter_mg_fixed_224_na_na_16 \
+    --output_dir "outputs/TEST_$(date +%Y%m%d_%H%M%S)" \
+    --base_dataset_path /workspace/guided_diffusion_policy/data/outputs/dec4/2025.12.04/00.06.44_clip_justCoffeeServeMug/checkpoints/epoch_30_step_2231/na_na_16_expert_testvlm \
     --eval_strategy steps \
     --logging_steps 500 \
     --eval_steps 500 \
@@ -57,15 +56,16 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --num_processes=8 --gpu_i
     --train_sample_interval 1 \
     --compare_interval 4,8,12,16 \
     --max_exact_per_demo 50 \
-    --binary_or_exact_gt binary
+    --binary_or_exact_gt binary \
+    --task_description "Pick the mug from under the coffee machine dispenser and place it on the counter"
 
 just to load data
-CUDA_VISIBLE_DEVICES=5 accelerate launch --num_processes=1 --gpu_ids=5 \
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --num_processes=8 --gpu_ids=0,1,2,3,4,5,6,7 \
     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/myscripts/sft_vlm_overlay_regression_dp_compare_across_sf.py \
     --model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
-    --output_dir "outputs/dec19/sft-side_by_side-regression-Qwen2.5-VL-7B-Instruct_$(date +%Y%m%d_%H%M%S)" \
-    --base_dataset_path /workspace/guided_diffusion_policy/data/outputs/dec4/2025.12.03/22.38.27_train_diffusion_unet_clip/checkpoints/epoch_70_step_4188/dec18_PnPStoveToCounter_mg_fixed_224_na_na_16 \
+    --output_dir "outputs/TEST_$(date +%Y%m%d_%H%M%S)" \
+    --base_dataset_path /workspace/guided_diffusion_policy/data/outputs/dec4/2025.12.04/05.17.32_clip_justPnPMicrowaveToCounter/checkpoints/epoch_60_step_4025/expert_na_na_16_test \
     --eval_strategy steps \
     --logging_steps 1 \
     --eval_steps 1 \
@@ -76,11 +76,12 @@ CUDA_VISIBLE_DEVICES=5 accelerate launch --num_processes=1 --gpu_ids=5 \
     --per_device_train_batch_size 8 \
     --per_device_eval_batch_size 8 \
     --report_to wandb \
-    --split train \
+    --split val \
     --train_sample_interval 1 \
     --compare_interval 4,8,12,16 \
     --max_exact_per_demo 50 \
-    --binary_or_exact_gt binary
+    --binary_or_exact_gt binary \
+    --task_description "Pick the object from the microwave and place it on the plate on the counter"
 
 
 """
@@ -222,6 +223,7 @@ if __name__ == "__main__":
         max_exact_per_demo: int = 2  # maximum number of demo_id_exact per demo_id to keep in the dataset
         binary_or_exact_gt: str = "exact"
         debug_samples: int = -1
+        task_description: str = ""
 
     parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig, OverlayArguments))
     script_args, training_args, model_args, overlay_args = parser.parse_args_and_config()
@@ -270,6 +272,7 @@ if __name__ == "__main__":
     logger.info(f"  - compare_interval: {compare_intervals}")
     logger.info(f"  - train_val_split_index: {overlay_args.train_val_split_index}")
     logger.info(f"  - base_dataset_path: {overlay_args.base_dataset_path}")
+    logger.info(f"  - task_description: {overlay_args.task_description}")
     ################
     # Model, Tokenizer & Processor
     ################
@@ -323,9 +326,9 @@ if __name__ == "__main__":
     # Dataset of all successes AND failures
     # IMPORTANT: Only rank 0 processes data to avoid redundant work and race conditions
     ################################
-    task_description = "Pick and place an object from the sink to the plate on the counter"
+    task_description = overlay_args.task_description
     SYSTEM_PROMPT = f"""You are an expert roboticist tasked to compare a side-by-side of 2 images from a robot demonstration and determine which side shows more progress toward completing the task.
-    The robot task is: {task_description}
+    The robot task is: {task_description}.
     You will be given a side-by-side of 2 images from the same demonstration, and you need to identify how much closer or behind in task completion is the right image compared to the left."""
 
     problem = f"""Look at these two side-by-side images of a robot performing the task. \
@@ -369,8 +372,9 @@ if __name__ == "__main__":
     dataset_cache_file = overlay_dir / f'dataset_cache_{split}_{overlay_args.train_sample_interval}__{intervals_str}__{overlay_args.include_successes}_{overlay_args.include_failures}.pkl'
     stats_cache_file = overlay_dir / f'dataset_stats_{split}_{overlay_args.train_sample_interval}__{intervals_str}__{overlay_args.include_successes}_{overlay_args.include_failures}.json'
     # Only rank 0 processes data; other ranks will wait and load the result
-    if local_rank == 0:
-        logger.info("Rank 0: Processing dataset...")
+    # if local_rank == 0:
+    if True:
+        logger.info(f"Rank {local_rank}: Processing dataset...")
        
         # Load or create persistent overlay cache
         overlay_images_cache = {}
@@ -439,6 +443,7 @@ if __name__ == "__main__":
                             elif overlay_args.binary_or_exact_gt == "exact":
                                 correct_answer = idx2 - idx1
                                 correct_answer = int(correct_answer/50 * 100)
+                                raise Exception("Exact not supported. calcaulation of previous line is incorrect")
                             else:
                                 raise Exception("Invalid binary_or_exact_gt value")
                             # Randomly swap image order 50% of the time to avoid position bias
@@ -448,7 +453,7 @@ if __name__ == "__main__":
                                 idx1, idx2 = idx2, idx1
                                 correct_answer = -correct_answer
                             # Create cache key for this overlay
-                            cache_key = f"success_{correct_answer}_{'/'.join(demo_dir.split('/')[8:]).replace('/','_')}_{f'frame_{idx1:06d}'}_{f'frame_{idx2:06d}'}"
+                            cache_key = f"success_{correct_answer}_{'/'.join(demo_dir.split('/')[11:]).replace('/','_')}_{f'frame_{idx1:06d}'}_{f'frame_{idx2:06d}'}"
                             overlay_filename = cache_key+".png"
                             overlay_path = overlay_dir / overlay_filename
 
@@ -505,7 +510,6 @@ if __name__ == "__main__":
                                 #only consider pairs after 8 frames after the failure starts
                                 continue
                         except Exception as e:
-                            pdb.set_trace()
                             logger.warning(f"Failed to compare images {image1_path} vs {image2_path}: {e}")
                             continue
 
@@ -525,7 +529,7 @@ if __name__ == "__main__":
                             correct_answer = -correct_answer
 
                         # Create cache key for this overlay
-                        cache_key = f"svsf_{correct_answer}_{'/'.join(image1_path.split('/')[8:]).replace('/','_')}_{'/'.join(image2_path.split('/')[8:]).replace('/','_')}"
+                        cache_key = f"svsf_{correct_answer}_{'/'.join(image1_path.split('/')[11:-1]).replace('/','_')}_{'/'.join(image2_path.split('/')[11:-1]).replace('/','_')}_frame_{idx1:06d}"
                         overlay_filename = cache_key + ".png"
                         overlay_path = overlay_dir / overlay_filename
 
@@ -540,7 +544,7 @@ if __name__ == "__main__":
                                 overlay_img.save(overlay_path)
                                 overlay_images_cache[cache_key] = str(overlay_path)
                             except Exception as e:
-                                logger.warning(f"S VS F CREATION: failed to create overlay for demo {demo_id} path name {overlay_filename} frames {idx1}-{idx2}: {e}")
+                                logger.warning(f"S VS F CREATION: failed to create overlay for demo {demo_id} path name {overlay_filename} frames {idx1}: {e}")
                                 continue
                         # Store minimal data structure (optimization: defer message dict creation)
                         local_data.append((
@@ -652,7 +656,7 @@ if __name__ == "__main__":
             total_successful_trajectories += len(success_data)
 
             logger.info(f"Found {len(all_metadata)} demos in {job_name}")
-            logger.info(f"Found {len(success_data)} successful and {len(failure_data)} failure trajectories in {job_name}")
+            logger.info(f"Found Total: {len(success_data)} successful and {len(failure_data)} failure trajectories in {job_name}")
             if stats_cache_file.exists():
                 with open(stats_cache_file, 'r') as f:
                     cached_stats = json.load(f)
@@ -660,11 +664,24 @@ if __name__ == "__main__":
                     sf_mean_diffs_at_idx = cached_stats['sf_mean_diffs_at_idx']
             else:
                 success_mean_diffs_at_idx = {}
-                for sk, sv in tqdm(success_by_demo.items()):
+                sf_mean_diffs_at_idx = {}
+                
+                # Parallelize stats generation
+                all_demo_ids = sorted(list(success_by_demo.keys()))
+                my_demo_ids = all_demo_ids[local_rank::world_size]
+                
+                for sk in tqdm(my_demo_ids, desc=f"Rank {local_rank} Stats"):
+                    # success_mean_diffs_at_idx[sk]={}
+                    # Use a local dict to avoid key errors if we were to update the main one directly (though here it's fine)
+                    # But we need to reconstruct the logic carefully.
+                    # The original code iterated over success_by_demo.items().
+                    # We iterate over keys.
+                    sv = success_by_demo[sk] # Get the value
+                    
                     success_mean_diffs_at_idx[sk]={}
-                    for x in range(1,min(10,len(success_by_demo[sk])-1)):
-                        one_sd = success_by_demo[sk][0]
-                        two_sd = success_by_demo[sk][x]
+                    for x in range(1,min(10,len(sv)-1)):
+                        one_sd = sv[0]
+                        two_sd = sv[x]
                         for idx in range(min(one_sd['trajectory_index'],two_sd['trajectory_index'])):
                             image1_path = one_sd['video_path'][:-4] + f'/frame_{idx:06d}.png'
                             image2_path = two_sd['video_path'][:-4] + f'/frame_{idx:06d}.png'
@@ -682,10 +699,12 @@ if __name__ == "__main__":
                             if idx not in success_mean_diffs_at_idx[sk]:
                                 success_mean_diffs_at_idx[sk][idx]=[]
                             success_mean_diffs_at_idx[sk][idx].append(mean_diff)
-                sf_mean_diffs_at_idx = {}
-                for sk, sv in tqdm(success_by_demo.items()):
+                            
+                # sf_mean_diffs_at_idx logic
+                for sk in tqdm(my_demo_ids, desc=f"Rank {local_rank} SF Stats"):
                     if sk not in failure_by_demo:
-                        pass
+                        continue # changed from pass to continue for clarity
+                    
                     sf_mean_diffs_at_idx[sk]={}
                     for x in range(0,min(10,len(failure_by_demo[sk])-1)):
                         one_sd = success_by_demo[sk][0]
@@ -706,10 +725,28 @@ if __name__ == "__main__":
                             mean_diff = np.mean(diff)
                             if idx not in sf_mean_diffs_at_idx[sk]:
                                 sf_mean_diffs_at_idx[sk][idx]=[]
-                            sf_mean_diffs_at_idx[sk][idx].append(mean_diff)  
+                            sf_mean_diffs_at_idx[sk][idx].append(mean_diff)
 
-                with open(stats_cache_file, 'w') as f:
-                    json.dump({"sf_mean_diffs_at_idx": sf_mean_diffs_at_idx, "success_mean_diffs_at_idx": success_mean_diffs_at_idx}, f)
+                # Gather stats from all ranks
+                if world_size > 1:
+                    logger.info(f"Rank {local_rank}: Gathering stats from all ranks...")
+                    all_success_stats = [None for _ in range(world_size)]
+                    all_sf_stats = [None for _ in range(world_size)]
+                    dist.all_gather_object(all_success_stats, success_mean_diffs_at_idx)
+                    dist.all_gather_object(all_sf_stats, sf_mean_diffs_at_idx)
+                    
+                    # Merge
+                    success_mean_diffs_at_idx = {}
+                    sf_mean_diffs_at_idx = {}
+                    for rank_stats in all_success_stats:
+                        success_mean_diffs_at_idx.update(rank_stats)
+                    for rank_stats in all_sf_stats:
+                        sf_mean_diffs_at_idx.update(rank_stats)
+                    logger.info(f"Rank {local_rank}: Gathered stats")
+
+                if local_rank == 0:
+                    with open(stats_cache_file, 'w') as f:
+                        json.dump({"sf_mean_diffs_at_idx": sf_mean_diffs_at_idx, "success_mean_diffs_at_idx": success_mean_diffs_at_idx}, f)
             
             # Process failure demos in parallel for this job
             if overlay_args.debug_samples > -1:
@@ -718,10 +755,15 @@ if __name__ == "__main__":
             else:
                 success_samples = success_data
                 failure_samples = failure_data
+            
+            # Split samples across ranks
+            success_samples = success_samples[local_rank::world_size]
+            failure_samples = failure_samples[local_rank::world_size]
+            logger.info(f"Rank {local_rank}: Found {len(success_samples)} successful and {len(failure_samples)} failure trajectories in {job_name}")
 
             with ThreadPoolExecutor(max_workers=8) as executor:
                 futures = {executor.submit(process_demo_pairs, one_demo, job_dir): one_demo
-                            for one_demo in success_samples + failure_samples}
+                            for one_demo in failure_samples + success_samples}
 
                 for future in tqdm(as_completed(futures), total=len(futures),
                                     desc=f"Generating {job_name} overlay pairs", unit="demo"):
@@ -730,7 +772,21 @@ if __name__ == "__main__":
                         combined_data.extend(demo_data)
                     except Exception as e:
                         demo_name = futures[future]
-                        logger.warning(f"Failed to process failure demo {demo_name} in {job_name}: {e}")
+                        logger.warning(f"Failed to process demo {demo_name} in {job_name}: {e}")
+
+            logger.info(f"Rank {local_rank}: Generated {len(combined_data)} pairs locally")
+            
+            # Gather data from all ranks
+            if world_size > 1:
+                logger.info(f"Rank {local_rank}: Gathering data from all ranks...")
+                all_data = [None for _ in range(world_size)]
+                dist.all_gather_object(all_data, combined_data)
+                
+                # Flatten the list of lists
+                combined_data = []
+                for rank_data in all_data:
+                    combined_data.extend(rank_data)
+                logger.info(f"Rank {local_rank}: Gathered {len(combined_data)} total pairs from all ranks")
 
             logger.info(f"Total pairs so far: {len(combined_data)}")
 
@@ -762,13 +818,14 @@ if __name__ == "__main__":
             logger.info(f"Converted {len(combined_data)} pairs to message format")
 
             # Save dataset cache (biggest speedup for subsequent runs)
-            with open(dataset_cache_file, 'wb') as f:
-                pickle.dump(combined_data, f)
-            logger.info(f"Saved {len(combined_data)} pairs to dataset cache at {dataset_cache_file}")
+            if local_rank == 0:
+                with open(dataset_cache_file, 'wb') as f:
+                    pickle.dump(combined_data, f)
+                logger.info(f"Saved {len(combined_data)} pairs to dataset cache at {dataset_cache_file}")
 
-            with open(overlay_images_cache_file, 'wb') as f:
-                pickle.dump(overlay_images_cache, f)
-            logger.info(f"Saved {len(overlay_images_cache)} overlays to cache (including failures)")
+                with open(overlay_images_cache_file, 'wb') as f:
+                    pickle.dump(overlay_images_cache, f)
+                logger.info(f"Saved {len(overlay_images_cache)} overlays to cache (including failures)")
 
     # Synchronize all processes: wait for rank 0 to finish processing
     if world_size > 1:
@@ -780,19 +837,19 @@ if __name__ == "__main__":
             logger.warning(f"Failed to synchronize processes: {e}")
 
     # Non-rank-0 processes load the cached dataset created by rank 0
-    if local_rank != 0:
-        logger.info(f"Rank {local_rank}: Loading dataset created by rank 0...")
-        if dataset_cache_file.exists():
-            try:
-                with open(dataset_cache_file, 'rb') as f:
-                    combined_data = pickle.load(f)
-                logger.info(f"Rank {local_rank}: Loaded {len(combined_data)} pairs from dataset cache")
-            except Exception as e:
-                logger.error(f"Rank {local_rank}: Failed to load dataset cache: {e}")
-                raise
-        else:
-            logger.error(f"Rank {local_rank}: Dataset cache not found at {dataset_cache_file}")
-            raise FileNotFoundError(f"Rank 0 should have created {dataset_cache_file}")
+    # if local_rank != 0:
+    #     logger.info(f"Rank {local_rank}: Loading dataset created by rank 0...")
+    #     if dataset_cache_file.exists():
+    #         try:
+    #             with open(dataset_cache_file, 'rb') as f:
+    #                 combined_data = pickle.load(f)
+    #             logger.info(f"Rank {local_rank}: Loaded {len(combined_data)} pairs from dataset cache")
+    #         except Exception as e:
+    #             logger.error(f"Rank {local_rank}: Failed to load dataset cache: {e}")
+    #             raise
+    #     else:
+    #         logger.error(f"Rank {local_rank}: Dataset cache not found at {dataset_cache_file}")
+    #         raise FileNotFoundError(f"Rank 0 should have created {dataset_cache_file}")
     # ============================================================================================
     # VISUALIZATION: Show examples and statistics of combined_data (BEFORE SHARDING)
     # ============================================================================================

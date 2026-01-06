@@ -27,22 +27,11 @@ Features:
 - Plots error distribution and prediction vs ground truth scatter plots
 
 Usage (example):
-# Evaluate on validation set with base model
-CUDA_VISIBLE_DEVICES=3 python3 examples/scripts/myscripts/evaluate_sft_vlm_overlay_regression_dp.py \
-    --base_model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
-    --dataset_cache_file /workspace/guided_diffusion_policy/data/checkpoints/dp_model/epoch=1100-val_loss=0.037/nov21_generate_dp_data_all_demos/overlay_images/pkl \
-    --dataset_split train \
-    --batch_size 300 \
-    --visualize \
-    --num_visualize 10 \
-    --seed 42 \
-    --num_samples 300
-
 # Evaluate trained checkpoint
 CUDA_VISIBLE_DEVICES=1 python3 examples/scripts/myscripts/evaluate_sft_vlm_overlay_regression_dp.py \
-    --model_name_or_path outputs/nov26/sft-side_by_side-regression-Qwen2.5-VL-7B-Instruct_20251126_213656/checkpoint-10000 \
+    --model_name_or_path outputs/PnPCoffeeServeMug_expert_data_20251226_170956/checkpoint-15000 \
     --base_model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
-    --dataset_cache_file /workspace/guided_diffusion_policy/data/checkpoints/dp_model/epoch=1100-val_loss=0.037/nov21_generate_dp_data_all_demos/overlay_images/dataset_cache_train_1__4_8_12_16__True_True.pkl \
+    --dataset_cache_file /workspace/guided_diffusion_policy/data/outputs/dec4/2025.12.04/00.06.44_clip_justCoffeeServeMug/checkpoints/epoch_30_step_2231/na_na_16_expert_testvlm/overlay_images_binary/dataset_cache_train_1__4_8_12_16__True_True.pkl \
     --dataset_split train \
     --batch_size 300 \
     --visualize \
@@ -51,17 +40,17 @@ CUDA_VISIBLE_DEVICES=1 python3 examples/scripts/myscripts/evaluate_sft_vlm_overl
     --num_samples 1000
 
 
-
-CUDA_VISIBLE_DEVICES=0 python3 examples/scripts/myscripts/evaluate_sft_vlm_overlay_regression_dp.py \
-    --model_name_or_path outputs/nov26/sft-side_by_side-regression-Qwen2.5-VL-7B-Instruct_20251127_222628/checkpoint-39000 \
+CUDA_VISIBLE_DEVICES=1 python3 examples/scripts/myscripts/evaluate_sft_vlm_overlay_regression_dp.py \
+    --model_name_or_path outputs/PnPMicrowaveToCounter_expert_data_20251226_154845/checkpoint-15000 \
     --base_model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
-    --dataset_cache_file /workspace/guided_diffusion_policy/data/checkpoints/dp_model/epoch=1100-val_loss=0.037/nov21_generate_dp_data_all_demos/overlay_images_exact/dataset_cache_train_1__4_8_12_16__True_True.pkl \
+    --dataset_cache_file /workspace/guided_diffusion_policy/data/outputs/dec4/2025.12.04/05.17.32_clip_justPnPMicrowaveToCounter/checkpoints/epoch_60_step_4025/expert_na_na_16_test/overlay_images_binary/dataset_cache_train_1__4_8_12_16__True_True.pkl \
     --dataset_split train \
     --batch_size 300 \
     --visualize \
     --num_visualize 10 \
     --seed 42 \
     --num_samples 1000
+
 """
 
 import argparse
