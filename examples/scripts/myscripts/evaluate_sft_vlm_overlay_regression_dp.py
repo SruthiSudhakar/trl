@@ -29,27 +29,14 @@ Features:
 Usage (example):
 # Evaluate trained checkpoint
 CUDA_VISIBLE_DEVICES=1 python3 examples/scripts/myscripts/evaluate_sft_vlm_overlay_regression_dp.py \
-    --model_name_or_path outputs/PnPCoffeeServeMug_expert_data_20251226_170956/checkpoint-15000 \
+    --model_name_or_path outputs/jan21/StoveToCounter_20260121_153119/checkpoint-17000 \
     --base_model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
-    --dataset_cache_file /workspace/guided_diffusion_policy/data/outputs/dec4/2025.12.04/00.06.44_clip_justCoffeeServeMug/checkpoints/epoch_30_step_2231/na_na_16_expert_testvlm/overlay_images_binary/dataset_cache_train_1__4_8_12_16__True_True.pkl \
-    --dataset_split train \
+    --dataset_cache_file /workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPStoveToCounter/overlay_images_binary/dataset_cache_val_1__4_8_12_16__True_True.pkl \
     --batch_size 300 \
     --visualize \
     --num_visualize 10 \
     --seed 42 \
-    --num_samples 1000
-
-
-CUDA_VISIBLE_DEVICES=1 python3 examples/scripts/myscripts/evaluate_sft_vlm_overlay_regression_dp.py \
-    --model_name_or_path outputs/PnPMicrowaveToCounter_expert_data_20251226_154845/checkpoint-15000 \
-    --base_model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
-    --dataset_cache_file /workspace/guided_diffusion_policy/data/outputs/dec4/2025.12.04/05.17.32_clip_justPnPMicrowaveToCounter/checkpoints/epoch_60_step_4025/expert_na_na_16_test/overlay_images_binary/dataset_cache_train_1__4_8_12_16__True_True.pkl \
-    --dataset_split train \
-    --batch_size 300 \
-    --visualize \
-    --num_visualize 10 \
-    --seed 42 \
-    --num_samples 1000
+    --num_samples 10000
 
 """
 
@@ -140,9 +127,20 @@ TASK_DESCRIPTION = "Pick and place an object from the sink to the plate on the c
 def build_prompts(overlay_method: str):
     if overlay_method != 'side_by_side':
         raise Exception('incorrect overlat method')
-    task_description = "Pick and place an object from the sink to the plate on the counter"
+    TASK_DESC_TO_SYSTEM_PROMPT = {
+        "PnPCounterToCab": "Pick the object from the counter and place it in the cabinet",
+        "PnPCabToCounter": "Pick the object from the cabinet and place it on the counter",
+        "PnPCounterToMicrowave": "Pick the object from the plate on the counter and place it in the microwave",
+        "PnPMicrowaveToCounter": "Pick the object from the microwave and place it on the plate on the counter",
+        "PnPStoveToCounter": "Pick the object from the stove and place it on the plate on the counter",  
+        "PnPCounterToStove": "Pick the object from the plate on the counter and place it on the stove",  
+        "PnPCounterToSink": "Pick the object from the plate on the counter and place it in the sink",  
+        "PnPSinkToCounter": "Pick the object from the sink and place it on the plate on the counter",
+        "PnPCoffeeServeMug": "Pick the mug from under the coffee machine dispenser and place it on the counter",
+        "PnPCloseDrawer": "Close the drawer",
+    }
     system_prompt = f"""You are an expert roboticist tasked to compare a side-by-side of 2 images from a robot demonstration and determine which side shows more progress toward completing the task.
-    The robot task is: {task_description}
+    The robot task is: INSERT_TASK_DESC_HERE
     You will be given a side-by-side of 2 images from the same demonstration, and you need to identify how much closer or behind in task completion is the right image compared to the left."""
 
     user_prompt = f"""Look at these two side-by-side images of a robot performing the task. \
@@ -155,7 +153,7 @@ def build_prompts(overlay_method: str):
     - If the right image shows less progress toward task completion, respond with a negative number (-1 to -100) \
 
     The number should represent how much more or less progress the right image shows compared to the left."""
-    return system_prompt, user_prompt
+    return system_prompt, user_prompt, TASK_DESC_TO_SYSTEM_PROMPT
 
 
 # -------------------------------
@@ -444,7 +442,7 @@ class OverlayRegressionEvaluator:
         self.output_dir = os.path.join(base_dir, f"eval_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}")
         os.makedirs(self.output_dir, exist_ok=True)
         self.overlay_method = 'side_by_side'
-        self.system_prompt, self.user_prompt = build_prompts(self.overlay_method)
+        self.system_prompt, self.user_prompt, self.task_descriptions_dict = build_prompts(self.overlay_method)
         self._load_model()
 
     def _load_model(self) -> None:
@@ -599,8 +597,22 @@ class OverlayRegressionEvaluator:
         images_batch: List[Any] = []
 
         for item in batch:
+            job_name = item['demo_name']
+            # Find matching task description based on job_name
+            task_desc = None
+            for task_key, task_description in self.task_descriptions_dict.items():
+                if task_key in job_name:
+                    task_desc = task_description
+                    break
+
+            # Create system prompt with task-specific description
+            if task_desc:
+                sample_system_prompt = self.system_prompt.replace("INSERT_TASK_DESC_HERE", task_desc)
+            else:
+                raise Exception("Task description not found for job name: " + job_name)
+
             conversation = [
-                {"role": "system", "content": [{"type": "text", "text": self.system_prompt}]},
+                {"role": "system", "content": [{"type": "text", "text": sample_system_prompt}]},
                 {
                     "role": "user",
                     "content": [

@@ -35,13 +35,15 @@ Optimizations:
 - Persistent overlay cache
 - Optimized numpy operations
 
+
+
 Usage:
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --num_processes=8 --gpu_ids=0,1,2,3,4,5,6,7 \
     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/myscripts/sft_vlm_overlay_regression_dp_compare_across_sf.py \
     --model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
-    --output_dir "outputs/TEST_$(date +%Y%m%d_%H%M%S)" \
-    --base_dataset_path /workspace/guided_diffusion_policy/data/outputs/dec4/2025.12.04/00.06.44_clip_justCoffeeServeMug/checkpoints/epoch_30_step_2231/na_na_16_expert_testvlm \
+    --output_dir "outputs/expert_allPnP_$(date +%Y%m%d_%H%M%S)" \
+    --base_dataset_path "/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToStove" \
     --eval_strategy steps \
     --logging_steps 500 \
     --eval_steps 500 \
@@ -57,7 +59,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --num_processes=8 --gpu_i
     --compare_interval 4,8,12,16 \
     --max_exact_per_demo 50 \
     --binary_or_exact_gt binary \
-    --task_description "Pick the mug from under the coffee machine dispenser and place it on the counter"
+    --task_description ""
 
 just to load data
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --num_processes=8 --gpu_ids=0,1,2,3,4,5,6,7 \
@@ -65,7 +67,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --num_processes=8 --gpu_i
     examples/scripts/myscripts/sft_vlm_overlay_regression_dp_compare_across_sf.py \
     --model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
     --output_dir "outputs/TEST_$(date +%Y%m%d_%H%M%S)" \
-    --base_dataset_path /workspace/guided_diffusion_policy/data/outputs/dec4/2025.12.04/05.17.32_clip_justPnPMicrowaveToCounter/checkpoints/epoch_60_step_4025/expert_na_na_16_test \
+    --base_dataset_path "/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToMicrowave" \
     --eval_strategy steps \
     --logging_steps 1 \
     --eval_steps 1 \
@@ -81,8 +83,8 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --num_processes=8 --gpu_i
     --compare_interval 4,8,12,16 \
     --max_exact_per_demo 50 \
     --binary_or_exact_gt binary \
-    --task_description "Pick the object from the microwave and place it on the plate on the counter"
-
+    --task_description ""
+    --just_prepare_data
 
 """
 
@@ -97,6 +99,7 @@ import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 import pickle
+import textwrap
 
 import torch
 from datasets import Dataset
@@ -218,12 +221,13 @@ if __name__ == "__main__":
         include_failures: bool = True
         train_sample_interval: int = 5
         compare_interval: str = "16"  # can be a single int (e.g., "16") or comma-separated list (e.g., "4,8,12,16")
-        train_val_split_index: int = 1  # index to split job directories into train/val sets
+        train_val_split_index: int = 5  # index to split job directories into train/val sets
         base_dataset_path: str = ''#/workspace/guided_diffusion_policy/externals/robocasa/datasets/v0.1/single_stage/kitchen_pnp/PnPStoveToCounter/2024-05-01'  # base path to dataset directory
         max_exact_per_demo: int = 2  # maximum number of demo_id_exact per demo_id to keep in the dataset
         binary_or_exact_gt: str = "exact"
         debug_samples: int = -1
         task_description: str = ""
+        just_prepare_data: bool = False
 
     parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig, OverlayArguments))
     script_args, training_args, model_args, overlay_args = parser.parse_args_and_config()
@@ -273,38 +277,7 @@ if __name__ == "__main__":
     logger.info(f"  - train_val_split_index: {overlay_args.train_val_split_index}")
     logger.info(f"  - base_dataset_path: {overlay_args.base_dataset_path}")
     logger.info(f"  - task_description: {overlay_args.task_description}")
-    ################
-    # Model, Tokenizer & Processor
-    ################
-    logger.info("\nLoading model and tokenizer...")
-    start_time = time.time()
 
-    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
-    quantization_config = get_quantization_config(model_args)
-    model_kwargs = dict(
-        revision=model_args.model_revision,
-        attn_implementation=model_args.attn_implementation,
-        dtype=dtype,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
-        quantization_config=quantization_config,
-    )
-
-    model = AutoModelForImageTextToText.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
-    )
-    # Load processor for formatting eval-time prompts with images
-    processor = None
-    try:
-        processor = AutoProcessor.from_pretrained(
-            model_args.model_name_or_path,
-            trust_remote_code=model_args.trust_remote_code,
-        )
-    except Exception as e:
-        logger.warning(f"Failed to load AutoProcessor: {e}. Example IO logging will be limited.")
-    logger.info(f"Model loaded successfully in {time.time() - start_time:.2f} seconds")
-    logger.info(f"Model type: {type(model).__name__}")
-    if hasattr(model, 'num_parameters'):
-        logger.info(f"Total parameters: {model.num_parameters()/1e9:.2f}B")
 
     logger.info("\nPreparing datasets...")
 
@@ -326,9 +299,20 @@ if __name__ == "__main__":
     # Dataset of all successes AND failures
     # IMPORTANT: Only rank 0 processes data to avoid redundant work and race conditions
     ################################
-    task_description = overlay_args.task_description
+    TASK_DESC_TO_SYSTEM_PROMPT = {
+        "PnPCounterToCab": "Pick the object from the counter and place it in the cabinet",
+        "PnPCabToCounter": "Pick the object from the cabinet and place it on the counter",
+        "PnPCounterToMicrowave": "Pick the object from the plate on the counter and place it in the microwave",
+        "PnPMicrowaveToCounter": "Pick the object from the microwave and place it on the plate on the counter",
+        "PnPStoveToCounter": "Pick the object from the stove and place it on the plate on the counter",  
+        "PnPCounterToStove": "Pick the object from the plate on the counter and place it on the stove",  
+        "PnPCounterToSink": "Pick the object from the plate on the counter and place it in the sink",  
+        "PnPSinkToCounter": "Pick the object from the sink and place it on the plate on the counter",
+        "PnPCoffeeServeMug": "Pick the mug from under the coffee machine dispenser and place it on the counter",
+        "PnPCloseDrawer": "Close the drawer",
+    }
     SYSTEM_PROMPT = f"""You are an expert roboticist tasked to compare a side-by-side of 2 images from a robot demonstration and determine which side shows more progress toward completing the task.
-    The robot task is: {task_description}.
+    The robot task is: INSERT_TASK_DESC_HERE.
     You will be given a side-by-side of 2 images from the same demonstration, and you need to identify how much closer or behind in task completion is the right image compared to the left."""
 
     problem = f"""Look at these two side-by-side images of a robot performing the task. \
@@ -363,8 +347,17 @@ if __name__ == "__main__":
     
     debug_suffix = '_debug' if overlay_args.debug_samples > -1 else ''
     binary_or_exact = '_binary' if overlay_args.binary_or_exact_gt == 'binary' else '_exact'
-    overlay_dir = Path(f'{overlay_args.base_dataset_path}/overlay_images{debug_suffix}{binary_or_exact}')
 
+    # Support multiple dataset paths (comma-separated)
+    dataset_paths = [p.strip() for p in overlay_args.base_dataset_path.split(',')]
+    is_multi_path = len(dataset_paths) > 1
+    logger.info(f"Loading from {len(dataset_paths)} dataset path(s): {dataset_paths}")
+
+    # For single path, use the original overlay_dir; for multi-path, we'll use a combined output
+    if "nov21_generate_dp_data_all_demos" in dataset_paths[0]:
+        overlay_dir = Path(f'{dataset_paths[0]}/overlay_images{debug_suffix}')
+    else:
+        overlay_dir = Path(f'{dataset_paths[0]}/overlay_images{debug_suffix}{binary_or_exact}')
     overlay_dir.mkdir(parents=True, exist_ok=True)
     overlay_images_cache_file = overlay_dir / f'overlay_images_cache.pkl'
     # Create a string representation of compare_intervals for cache filename
@@ -391,33 +384,56 @@ if __name__ == "__main__":
         total_successful_trajectories = 0
         job_dir_trajectory_counts = {}
 
-        if dataset_cache_file.exists():
-            logger.info(f"Loading pre-computed dataset from {dataset_cache_file}")
-            try:
-                with open(dataset_cache_file, 'rb') as f:
-                    combined_data = pickle.load(f)
-                logger.info(f"Loaded {len(combined_data)} pairs from dataset cache - skipping processing!")
-                # Try to load trajectory counts from stats cache if available
-                stats_path_cache = overlay_dir / 'combined_data_analysis' / 'combined_data_stats.json'
-                if stats_path_cache.exists():
-                    try:
-                        with open(stats_path_cache, 'r') as f:
-                            cached_stats = json.load(f)
-                            if 'trajectory_statistics' in cached_stats:
-                                total_successful_trajectories = cached_stats['trajectory_statistics'].get('total_successful_trajectories', 0)
-                                job_dir_trajectory_counts = cached_stats['trajectory_statistics'].get('job_dir_breakdown', {})
-                                logger.info(f"Loaded trajectory statistics from cache: {total_successful_trajectories} successful trajectories")
-                    except Exception as e:
-                        logger.warning(f"Failed to load trajectory statistics from cache: {e}")
-            except Exception as e:
-                logger.warning(f"Failed to load dataset cache: {e}. Will reprocess.")
-                combined_data = []            
+        # Try to load cached datasets from all paths
+        all_cached = True
+        for dataset_path in dataset_paths:
+            if "nov21_generate_dp_data_all_demos" in dataset_path:
+                path_overlay_dir = Path(f'{dataset_path}/overlay_images{debug_suffix}')
+            else:
+                path_overlay_dir = Path(f'{dataset_path}/overlay_images{debug_suffix}{binary_or_exact}')
+            path_cache_file = path_overlay_dir / f'dataset_cache_{split}_{overlay_args.train_sample_interval}__{intervals_str}__{overlay_args.include_successes}_{overlay_args.include_failures}.pkl'
+
+            if path_cache_file.exists():
+                logger.info(f"Loading pre-computed dataset from {path_cache_file}")
+                try:
+                    with open(path_cache_file, 'rb') as f:
+                        path_data = pickle.load(f)
+                    logger.info(f"  Loaded {len(path_data)} pairs from {dataset_path}")
+                    combined_data.extend(path_data)
+
+                    # Try to load trajectory counts from stats cache if available
+                    stats_path_cache = path_overlay_dir / 'combined_data_analysis' / 'combined_data_stats.json'
+                    if stats_path_cache.exists():
+                        try:
+                            with open(stats_path_cache, 'r') as f:
+                                cached_stats = json.load(f)
+                                if 'trajectory_statistics' in cached_stats:
+                                    total_successful_trajectories += cached_stats['trajectory_statistics'].get('total_successful_trajectories', 0)
+                                    path_job_counts = cached_stats['trajectory_statistics'].get('job_dir_breakdown', {})
+                                    job_dir_trajectory_counts.update(path_job_counts)
+                        except Exception as e:
+                            logger.warning(f"Failed to load trajectory statistics from {stats_path_cache}: {e}")
+                except Exception as e:
+                    logger.warning(f"Failed to load dataset cache from {path_cache_file}: {e}")
+                    all_cached = False
+            else:
+                logger.warning(f"No cached dataset found at {path_cache_file}")
+                all_cached = False
+
+        if all_cached and len(combined_data) > 0:
+            logger.info(f"Loaded {len(combined_data)} total pairs from {len(dataset_paths)} cached dataset(s) - skipping processing!")
+        elif is_multi_path and not all_cached:
+            raise ValueError(f"Multi-path mode requires all paths to have pre-cached datasets. Missing cache for one or more paths.")
+        else:
+            # Single path mode without cache - will process below
+            combined_data = []            
 
         # Only process if we don't have cached data
         if len(combined_data) == 0:
             def process_demo_pairs(one_demo, dataset_path):
                 """Process all pairs for a single failure demo."""
                 local_data = []
+                job_name = Path(dataset_path).name
                 demo_dir = one_demo['video_path'][:-4]
                 demo_id = demo_dir.split('/')[-1].split('_')[0]
                 demo_id_exact = demo_dir.split('/')[-1]
@@ -479,6 +495,7 @@ if __name__ == "__main__":
                                 demo_id,
                                 demo_id_exact,
                                 'success',
+                                job_name,
                             ))
                 interval = 4
                 if one_demo['sf']=='fail':
@@ -498,11 +515,28 @@ if __name__ == "__main__":
                             diff = np.abs(arr1.astype(float) - arr2.astype(float))
                             mean_diff = np.mean(diff)
                             # Check if difference is significant
-                            current_demo_id = type(list(success_mean_diffs_at_idx.keys())[0])(one_demo['demo_id'])
-                            idx1 = type(list(success_mean_diffs_at_idx[current_demo_id].keys())[0])(idx1)
-                            if (idx1) in success_mean_diffs_at_idx[current_demo_id] and mean_diff <= np.mean(success_mean_diffs_at_idx[current_demo_id][idx1]) + np.std(success_mean_diffs_at_idx[current_demo_id][idx1]):  # Threshold for "too similar"
-                                # print(f"Skipping pair {image1_path} vs {image2_path}: mean_diff={mean_diff:.2f} (images too similar)")
+                            # Check if difference is significant
+                            should_skip = False
+                            if len(success_mean_diffs_at_idx) > 0:
+                                # Determine key type for demo_id
+                                first_demo_key = list(success_mean_diffs_at_idx.keys())[0]
+                                current_demo_id = type(first_demo_key)(one_demo['demo_id'])
+                                
+                                if current_demo_id in success_mean_diffs_at_idx:
+                                    demo_stats = success_mean_diffs_at_idx[current_demo_id]
+                                    if len(demo_stats) > 0:
+                                        # Determine key type for idx
+                                        first_idx_key = list(demo_stats.keys())[0]
+                                        idx1_key = type(first_idx_key)(idx1)
+                                        
+                                        if idx1_key in demo_stats:
+                                            stats = demo_stats[idx1_key]
+                                            if mean_diff <= np.mean(stats) + np.std(stats):
+                                                should_skip = True
+                            
+                            if should_skip:
                                 continue
+                            
                             idx1 = int(idx1)
                             if beginning_of_failure is None:
                                 beginning_of_failure = idx1
@@ -511,6 +545,7 @@ if __name__ == "__main__":
                                 continue
                         except Exception as e:
                             logger.warning(f"Failed to compare images {image1_path} vs {image2_path}: {e}")
+                            # pdb.set_trace()
                             continue
 
                         # Determine which image is closer to completion (higher index = more progress)
@@ -555,6 +590,7 @@ if __name__ == "__main__":
                             demo_id,
                             demo_id_exact,
                             'failure',
+                            job_name,
                         ))
                 return local_data
 
@@ -596,7 +632,6 @@ if __name__ == "__main__":
                                 'demo_id': demo_id
                             })
 
-            # Track successful trajectories for this job directory
             failure_data = []
             for idx, fd in enumerate(unfiltered_failure_data):
                 demo_id = fd['demo_id']
@@ -799,9 +834,24 @@ if __name__ == "__main__":
             logger.info("Converting data to final message format...")
             final_combined_data = []
             for item in combined_data:
-                # item format: (overlay_path, correct_answer, orig_img1, orig_img2, demo_type)
+                # item format: (overlay_path, correct_answer, orig_img1, orig_img2, demo_id, demo_id_exact, demo_type, job_name)
+                job_name = item[7] if len(item) > 7 else ""
+
+                # Find matching task description based on job_name
+                task_desc = None
+                for task_key, task_description in TASK_DESC_TO_SYSTEM_PROMPT.items():
+                    if task_key in job_name:
+                        task_desc = task_description
+                        break
+
+                # Create system prompt with task-specific description
+                if task_desc:
+                    sample_system_prompt = SYSTEM_PROMPT.replace("INSERT_TASK_DESC_HERE", task_desc)
+                else:
+                    sample_system_prompt = SYSTEM_PROMPT
+
                 messages = [
-                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "system", "content": sample_system_prompt},
                     {"role": "user", "content": problem},
                     {"role": "assistant", "content": str(item[1])}
                 ]
@@ -812,7 +862,8 @@ if __name__ == "__main__":
                     "original_images": [item[2], item[3]],
                     "demo_id": item[4],
                     "demo_id_exact": item[5],
-                    "demo_success": item[6]
+                    "demo_success": item[6],
+                    "job_name": job_name
                 })
             combined_data = final_combined_data
             logger.info(f"Converted {len(combined_data)} pairs to message format")
@@ -1049,8 +1100,24 @@ if __name__ == "__main__":
                             color = 'green' if progress_val > 0 else 'red' if progress_val < 0 else 'gray'
                             # Add success/failure label to title
                             success_label = '✓ Success' if demo_success == 'success' else '✗ Failure' if demo_success == 'failure' else 'Unknown'
-                            ax.set_title(f'Progress: {answer} ({success_label})',
-                                       fontsize=10, fontweight='bold', color=color)
+                            
+                            # Add task description
+                            job_name = item.get('job_name', '')
+                            task_desc = ""
+                            for task_key, task_description in TASK_DESC_TO_SYSTEM_PROMPT.items():
+                                if task_key in job_name:
+                                    task_desc = task_description
+                                    break
+                            
+                            # Wrap task description for display
+                            if task_desc:
+                                task_desc_short = textwrap.shorten(task_desc, width=40, placeholder="...")
+                                title_text = f'Progress: {answer} ({success_label})\n{task_desc_short}'
+                            else:
+                                title_text = f'Progress: {answer} ({success_label})'
+
+                            ax.set_title(title_text,
+                                       fontsize=8, fontweight='bold', color=color)
                         except Exception as e:
                             ax.text(0.5, 0.5, f'Error: {str(e)}',
                                    ha='center', va='center', transform=ax.transAxes, fontsize=8)
@@ -1426,9 +1493,21 @@ if __name__ == "__main__":
         if local_rank == 0:
             logger.warning("No data generated, skipping visualizations")
 
+    if overlay_args.just_prepare_data:
+        logger.info(f"Rank {local_rank}: Data preparation and visualization complete. Exiting as requested by --just_prepare_data")
+        import sys
+        sys.exit(0)
+
     # Combine success and failure data
     logger.info(f"Rank {local_rank}: Dataset ready with {len(combined_data)} pairs")
 
+    # IMPORTANT: Shuffle combined_data BEFORE sharding to ensure data from multiple
+    # datasets is properly mixed across all GPUs. All ranks use the same seed so they
+    # compute the same shuffled order before taking their respective shards.
+    logger.info(f"Rank {local_rank}: Shuffling {len(combined_data)} samples before sharding (seed=42)...")
+    random.seed(42)
+    random.shuffle(combined_data)
+    logger.info(f"Rank {local_rank}: Shuffle complete")
 
     # IMPORTANT: Shard dataset per process for correct distributed training
     # Without sharding, all GPUs would process the same data (wasted computation)
@@ -1474,7 +1553,7 @@ if __name__ == "__main__":
     dataset = dataset.cast_column("images", hf_datasets.Sequence(hf_datasets.Image()))
 
     # Smaller test split to reduce memory per GPU
-    test_size = min(10, max(2, len(dataset) // 20))
+    test_size = max(2, len(dataset) // 20)
     logger.info(f"Rank {local_rank}: Splitting dataset with test_size={test_size}")
     # Note: shuffle=True in train_test_split will shuffle during split
     dataset = dataset.train_test_split(test_size=test_size, seed=42, shuffle=True)
@@ -1486,6 +1565,39 @@ if __name__ == "__main__":
     logger.info(f"Rank {local_rank}: Training samples: {len(train_dataset)}")
     if eval_dataset:
         logger.info(f"Rank {local_rank}: Evaluation samples: {len(eval_dataset)}")
+
+    ################
+    # Model, Tokenizer & Processor
+    ################
+    logger.info("\nLoading model and tokenizer...")
+    start_time = time.time()
+
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
+    quantization_config = get_quantization_config(model_args)
+    model_kwargs = dict(
+        revision=model_args.model_revision,
+        attn_implementation=model_args.attn_implementation,
+        dtype=dtype,
+        device_map=get_kbit_device_map() if quantization_config is not None else None,
+        quantization_config=quantization_config,
+    )
+
+    model = AutoModelForImageTextToText.from_pretrained(
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
+    )
+    # Load processor for formatting eval-time prompts with images
+    processor = None
+    try:
+        processor = AutoProcessor.from_pretrained(
+            model_args.model_name_or_path,
+            trust_remote_code=model_args.trust_remote_code,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to load AutoProcessor: {e}. Example IO logging will be limited.")
+    logger.info(f"Model loaded successfully in {time.time() - start_time:.2f} seconds")
+    logger.info(f"Model type: {type(model).__name__}")
+    if hasattr(model, 'num_parameters'):
+        logger.info(f"Total parameters: {model.num_parameters()/1e9:.2f}B")
 
     ################
     # Training
@@ -1529,11 +1641,14 @@ if __name__ == "__main__":
             fallbacks = []
             for ex in examples:
                 try:
-                    # Recover the problem/user text and target (assistant content)
+                    # Recover the system/user text and target (assistant content) from this sample's messages
                     messages_in = ex.get("messages", [])
+                    system_text = self.system_prompt  # fallback to global
                     user_text = ""
                     target_text = None
                     for m in messages_in:
+                        if m.get("role") == "system":
+                            system_text = m.get("content", self.system_prompt)
                         if m.get("role") == "user":
                             user_text = m.get("content", "")
                         if m.get("role") == "assistant":
@@ -1541,7 +1656,7 @@ if __name__ == "__main__":
 
                     # Compose multi-modal chat with single overlay image
                     mm_messages = [
-                        {"role": "system", "content": [{"type": "text", "text": self.system_prompt}]},
+                        {"role": "system", "content": [{"type": "text", "text": system_text}]},
                         {
                             "role": "user",
                             "content": [
