@@ -38,6 +38,16 @@ CUDA_VISIBLE_DEVICES=1 python3 examples/scripts/myscripts/evaluate_sft_vlm_overl
     --seed 42 \
     --num_samples 10000
 
+CUDA_VISIBLE_DEVICES=2 python3 examples/scripts/myscripts/evaluate_sft_vlm_overlay_regression_dp.py \
+    --model_name_or_path outputs/expert_allPnP_20260122_193654/checkpoint-28500 \
+    --base_model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
+    --dataset_cache_file /workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPStoveToCounter/overlay_images_binary/dataset_cache_val_1__4_8_12_16__True_True.pkl \
+    --batch_size 300 \
+    --visualize \
+    --num_visualize 10 \
+    --seed 42 \
+    --num_samples 10000
+
 """
 
 import argparse

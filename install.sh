@@ -37,7 +37,7 @@ echo "✅ Installation complete!"
 
 # --- Hugging Face authentication ---
 echo "🔑 Logging into Hugging Face..."
-huggingface-cli login --token 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 --add-to-git-credential
+huggingface-cli login --token YOUR_HF_TOKEN --add-to-git-credential
 
 # --- Weights & Biases authentication ---
 echo "📊 Logging into Weights & Biases..."

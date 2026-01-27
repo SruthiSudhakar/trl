@@ -38,36 +38,36 @@ Optimizations:
 
 
 Usage:
-# CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --num_processes=8 --gpu_ids=0,1,2,3,4,5,6,7 \
-#     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-#     examples/scripts/myscripts/sft_vlm_overlay_regression_dp_compare_across_sf.py \
-#     --model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
-#     --output_dir "outputs/expert_allPnP_$(date +%Y%m%d_%H%M%S)" \
-#     --base_dataset_path "/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToStove" \
-#     --eval_strategy steps \
-#     --logging_steps 500 \
-#     --eval_steps 500 \
-#     --save_steps 500 \
-#     --gradient_accumulation_steps 1 \
-#     --num_train_epochs 500 \
-#     --learning_rate 1e-5 \
-#     --per_device_train_batch_size 8 \
-#     --per_device_eval_batch_size 8 \
-#     --report_to wandb \
-#     --split train \
-#     --train_val_split_index 
-#     --train_sample_interval 1 \
-#     --compare_interval 4,8,12,16 \
-#     --max_exact_per_demo 50 \
-#     --binary_or_exact_gt binary
-
-just to load data
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --num_processes=8 --gpu_ids=0,1,2,3,4,5,6,7 \
     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/myscripts/sft_vlm_overlay_regression_dp_compare_across_sf.py \
     --model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
-    --base_dataset_path "/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_mg_place_PnPCabToCounter_mg_fixed_224" \
+    --output_dir "outputs/expert_allPnP_$(date +%Y%m%d_%H%M%S)" \
+    --base_dataset_path "/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToStove" \
+    --eval_strategy steps \
+    --logging_steps 500 \
+    --eval_steps 500 \
+    --save_steps 500 \
+    --gradient_accumulation_steps 1 \
+    --num_train_epochs 500 \
+    --learning_rate 1e-5 \
+    --per_device_train_batch_size 8 \
+    --per_device_eval_batch_size 8 \
+    --report_to wandb \
+    --split train \
+    --train_sample_interval 1 \
+    --compare_interval 4,8,12,16 \
+    --max_exact_per_demo 50 \
+    --binary_or_exact_gt binary
+
+just to load data
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --num_processes=8 --gpu_ids=0,1,2,3,4,5,6,7 \
+CUDA_VISIBLE_DEVICES=0 accelerate launch --num_processes=1 --gpu_ids=0 \
+    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
+    examples/scripts/myscripts/sft_vlm_overlay_regression_dp_compare_across_sf.py \
+    --model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
     --output_dir "outputs/TEST_$(date +%Y%m%d_%H%M%S)" \
+    --base_dataset_path "/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToStove,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPStoveToCounter,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToMicrowave,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPMicrowaveToCounter,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToSink,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPSinkToCounter,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCoffeeServeMug,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCloseDrawer,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCabToCounter,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToCab" \
     --eval_strategy steps \
     --logging_steps 1 \
     --eval_steps 1 \
@@ -79,9 +79,8 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --num_processes=8 --gpu_i
     --per_device_eval_batch_size 8 \
     --report_to wandb \
     --split train \
-    --train_val_split_index 40 \
-    --train_sample_interval 50 \
-    --compare_interval 200 \
+    --train_sample_interval 1 \
+    --compare_interval 4,8,12,16 \
     --max_exact_per_demo 50 \
     --binary_or_exact_gt binary 
 
@@ -237,7 +236,6 @@ def visualize_dataset(combined_data, output_dir, split_name="train", num_example
     demo_ids = []
     demo_ids_exact = []
     job_names = []
-    task_tokens = []
 
     for item in combined_data:
         correct_answers.append(item.get("correct_answer", 0))
@@ -245,7 +243,6 @@ def visualize_dataset(combined_data, output_dir, split_name="train", num_example
         demo_ids.append(item.get("demo_id", "unknown"))
         demo_ids_exact.append(item.get("demo_id_exact", "unknown"))
         job_names.append(item.get("job_name", "unknown"))
-        task_tokens.append(item.get("task_token", "unknown"))
 
     # ============ Figure 1: Dataset Statistics ============
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
@@ -370,25 +367,21 @@ def visualize_dataset(combined_data, output_dir, split_name="train", num_example
         answer = item.get("correct_answer", "?")
         demo_type = item.get("demo_success", "unknown")
         demo_id = item.get("demo_id", "?")
-        task_token = item.get("task_token", None)
         job = item.get("job_name", "unknown")
 
-        # Use task_token if available, otherwise extract from job_name
-        if task_token:
-            short_task = task_token
-        else:
-            short_task = job
-            for key in ["PnPCounterToCab", "PnPCabToCounter", "PnPCounterToMicrowave",
-                        "PnPMicrowaveToCounter", "PnPStoveToCounter", "PnPCounterToStove",
-                        "PnPCounterToSink", "PnPSinkToCounter", "PnPCoffeeServeMug", "PnPCloseDrawer"]:
-                if key in job:
-                    short_task = key
-                    break
+        # Extract short task name
+        short_job = job
+        for key in ["PnPCounterToCab", "PnPCabToCounter", "PnPCounterToMicrowave",
+                    "PnPMicrowaveToCounter", "PnPStoveToCounter", "PnPCounterToStove",
+                    "PnPCounterToSink", "PnPSinkToCounter", "PnPCoffeeServeMug", "PnPCloseDrawer"]:
+            if key in job:
+                short_job = key
+                break
 
         # Color code by answer direction
         title_color = '#2ecc71' if answer > 0 else '#e74c3c' if answer < 0 else '#333333'
 
-        title = f"Answer: {answer} | Type: {demo_type}\nDemo: {demo_id} | {short_task}"
+        title = f"Answer: {answer} | Type: {demo_type}\nDemo: {demo_id} | Task: {short_job}"
         ax.set_title(title, fontsize=10, color=title_color, fontweight='bold')
 
     plt.suptitle(f"Sample Images ({split_name} split)", fontsize=14, fontweight='bold', y=1.02)
@@ -399,11 +392,6 @@ def visualize_dataset(combined_data, output_dir, split_name="train", num_example
     logger.info(f"Saved sample images to {samples_path}")
 
     # ============ Save Statistics Summary as JSON ============
-    # Count task tokens
-    task_token_counts = defaultdict(int)
-    for t in task_tokens:
-        task_token_counts[t] += 1
-
     stats_summary = {
         "split": split_name,
         "total_samples": len(combined_data),
@@ -412,7 +400,6 @@ def visualize_dataset(combined_data, output_dir, split_name="train", num_example
         "num_unique_demo_ids": len(set(demo_ids)),
         "num_unique_demo_ids_exact": len(set(demo_ids_exact)),
         "task_distribution": dict(job_counts),
-        "task_token_distribution": dict(task_token_counts),
         "samples_per_demo_id": {str(k): v for k, v in demo_id_counts.items()},
         "trajectory_statistics": {
             "total_successful_trajectories": sum(1 for t in demo_types if t == "success"),
@@ -482,23 +469,19 @@ def visualize_dataset(combined_data, output_dir, split_name="train", num_example
         answer = item.get("correct_answer", "?")
         demo_type = item.get("demo_success", "?")
         demo_id = item.get("demo_id", "?")
-        task_token = item.get("task_token", None)
         job = item.get("job_name", "")
 
-        # Use task_token if available, otherwise extract from job_name
-        if task_token:
-            short_task = task_token
-        else:
-            short_task = "unknown"
-            for key in ["PnPCounterToCab", "PnPCabToCounter", "PnPCounterToMicrowave",
-                        "PnPMicrowaveToCounter", "PnPStoveToCounter", "PnPCounterToStove",
-                        "PnPCounterToSink", "PnPSinkToCounter", "PnPCoffeeServeMug", "PnPCloseDrawer"]:
-                if key in job:
-                    short_task = key
-                    break
+        # Extract task name
+        short_job = "unknown"
+        for key in ["PnPCounterToCab", "PnPCabToCounter", "PnPCounterToMicrowave",
+                    "PnPMicrowaveToCounter", "PnPStoveToCounter", "PnPCounterToStove",
+                    "PnPCounterToSink", "PnPSinkToCounter", "PnPCoffeeServeMug", "PnPCloseDrawer"]:
+            if key in job:
+                short_job = key
+                break
 
         title_color = '#2ecc71' if answer > 0 else '#e74c3c' if answer < 0 else '#333333'
-        ax3.set_title(f"Overlay | Answer: {answer} | {demo_type} | Demo {demo_id} | {short_task}",
+        ax3.set_title(f"Overlay | Answer: {answer} | {demo_type} | Demo {demo_id} | {short_job}",
                       fontsize=10, color=title_color, fontweight='bold')
 
     plt.suptitle(f"Detailed Examples: Original Pairs + Overlay ({split_name})", fontsize=12, fontweight='bold')
@@ -597,33 +580,52 @@ if __name__ == "__main__":
     # Dataset of all successes AND failures
     # IMPORTANT: Only rank 0 processes data to avoid redundant work and race conditions
     ################################
-    # Simple task tokens - easy for the model to learn distinct task identities
-    TASK_TOKENS = {
-        "PnPCounterToCab": "[COUNTER_TO_CAB]",
-        "PnPCabToCounter": "[CAB_TO_COUNTER]",
-        "PnPCounterToMicrowave": "[COUNTER_TO_MICROWAVE]",
-        "PnPMicrowaveToCounter": "[MICROWAVE_TO_COUNTER]",
-        "PnPStoveToCounter": "[STOVE_TO_COUNTER]",
-        "PnPCounterToStove": "[COUNTER_TO_STOVE]",
-        "PnPCounterToSink": "[COUNTER_TO_SINK]",
-        "PnPSinkToCounter": "[SINK_TO_COUNTER]",
-        "PnPCoffeeServeMug": "[COFFEE_SERVE_MUG]",
-        "PnPCloseDrawer": "[CLOSE_DRAWER]",
+    TASK_DESC_TO_SYSTEM_PROMPT = {
+        "PnPCounterToCab": "Pick the object from the counter and place it in the cabinet",
+        "PnPCabToCounter": "Pick the object from the cabinet and place it on the counter",
+        "PnPCounterToMicrowave": "Pick the object from the plate on the counter and place it in the microwave",
+        "PnPMicrowaveToCounter": "Pick the object from the microwave and place it on the plate on the counter",
+        "PnPStoveToCounter": "Pick the object from the stove and place it on the plate on the counter",  
+        "PnPCounterToStove": "Pick the object from the plate on the counter and place it on the stove",  
+        "PnPCounterToSink": "Pick the object from the plate on the counter and place it in the sink",  
+        "PnPSinkToCounter": "Pick the object from the sink and place it on the plate on the counter",
+        "PnPCoffeeServeMug": "Pick the mug from under the coffee machine dispenser and place it on the counter",
+        "PnPCloseDrawer": "Close the drawer",
     }
+    SYSTEM_PROMPT = f"""You are an expert roboticist tasked to compare a side-by-side of 2 images from a robot demonstration and determine which side shows more progress toward completing the task.
+    The robot task is: INSERT_TASK_DESC_HERE.
+    You will be given a side-by-side of 2 images from the same demonstration, and you need to identify how much closer or behind in task completion is the right image compared to the left."""
 
-    # Minimal system prompt - the task token does the heavy lifting
-    SYSTEM_PROMPT = "Compare robot task progress. Respond with a number: positive if right image shows more progress, negative if less."
+    problem = f"""Look at these two side-by-side images of a robot performing the task. \
 
-    # User prompt template - task token is prominent, right before asking for comparison
-    USER_PROMPT_TEMPLATE = """Task: {task_token}
-Which image shows more task progress? Respond with a number from -100 to 100."""
+    Left side image: Shows the robot at one point during the task. \
+    Right side image: Shows the robot at another point during the task. \
+
+    Task: Compare the two images and determine the relative progress difference. \
+    - If the right image shows more progress toward task completion, respond with a positive number of how much farther (1 to 100) \
+    - If the right image shows less progress toward task completion, respond with a negative number (-1 to -100) \
+
+    The number should represent how much more or less progress the right image shows compared to the left."""
 
     # Load failure dataset from all job directories
 
     # Find all sep29_job* directories
     import glob
     import os
+    all_dirs = sorted(glob.glob(f'{overlay_args.base_dataset_path}/*'))
+    # Filter to only include directories with eval_log.json
+    job_dirs = [d for d in all_dirs if os.path.isdir(d) and os.path.exists(os.path.join(d, 'eval_log.json'))]
     split = overlay_args.split
+
+    if split == 'val':
+        job_dirs = job_dirs[-overlay_args.train_val_split_index:]
+    elif split=='train':
+        job_dirs = job_dirs[:-overlay_args.train_val_split_index]
+    else:
+        job_dirs = job_dirs[:int(split)]
+    logger.info(f"Found {len(job_dirs)} job directories.")
+    print(f"Loading pre-extracted images from {len(job_dirs)} for {split} split")
+    
     debug_suffix = '_debug' if overlay_args.debug_samples > -1 else ''
     binary_or_exact = '_binary' if overlay_args.binary_or_exact_gt == 'binary' else '_exact'
 
@@ -677,14 +679,6 @@ Which image shows more task progress? Respond with a number from -100 to 100."""
                 try:
                     with open(path_cache_file, 'rb') as f:
                         path_data = pickle.load(f)
-                    # # Fix absolute paths to be relative to current base_dataset_path  
-                    # old_base = overlay_args.base_dataset_path.split('overlay_images_binary')[0]
-                    # pdb.set_trace()
-                    # new_base = '' # overlay_args.base_dataset_path.split('overlay_images_binary')[0]
-                    # for item in path_data:                                                                                                                                                                                          
-                    #     # Fix overlay image path                                                                                                                                                                                    
-                    #     item["images"] = [img.replace(old_base, new_base) for img in item["images"]]                                                                                                                                
-
                     logger.info(f"  Loaded {len(path_data)} pairs from {dataset_path}")
                     combined_data.extend(path_data)
 
@@ -717,19 +711,6 @@ Which image shows more task progress? Respond with a number from -100 to 100."""
 
         # Only process if we don't have cached data
         if len(combined_data) == 0:
-            all_dirs = sorted(glob.glob(f'{overlay_args.base_dataset_path}/*'))
-            # Filter to only include directories with eval_log.json
-            job_dirs = [d for d in all_dirs if os.path.isdir(d) and os.path.exists(os.path.join(d, 'eval_log.json'))]
-
-            if split == 'val':
-                job_dirs = job_dirs[-overlay_args.train_val_split_index:]
-            elif split=='train':
-                job_dirs = job_dirs[:-overlay_args.train_val_split_index]
-            else:
-                job_dirs = job_dirs[:int(split)]
-            logger.info(f"Found {len(job_dirs)} job directories.")
-            print(f"Loading pre-extracted images from {len(job_dirs)} for {split} split")
-
             def process_demo_pairs(one_demo, dataset_path):
                 """Process all pairs for a single failure demo."""
                 local_data = []
@@ -956,7 +937,6 @@ Which image shows more task progress? Respond with a number from -100 to 100."""
             logger.info(f"Found {len(common_demo_ids)} demo_ids present in both success and failure data")
             if len(common_demo_ids) == 0:
                 logger.warning("No common demo_ids found between success and failure data!")
-                pdb.set_trace()
                 raise Exception('No common demo_ids found between success and failure data!')
             else:
                 # Calculate the minimum count per demo_id to ensure equal representation
@@ -1138,33 +1118,33 @@ Which image shows more task progress? Respond with a number from -100 to 100."""
                 # item format: (overlay_path, correct_answer, orig_img1, orig_img2, demo_id, demo_id_exact, demo_type, job_name)
                 job_name = item[7] if len(item) > 7 else ""
 
-                # Find matching task token based on job_name
-                task_token = None
-                for task_key, token in TASK_TOKENS.items():
+                # Find matching task description based on job_name
+                task_desc = None
+                for task_key, task_description in TASK_DESC_TO_SYSTEM_PROMPT.items():
                     if task_key in job_name:
-                        task_token = token
+                        task_desc = task_description
                         break
 
-                if task_token is None:
-                    raise ValueError(f"No task token found for job name: {job_name}")
-
-                # Create user prompt with task token
-                user_prompt = USER_PROMPT_TEMPLATE.format(task_token=task_token)
+                # Create system prompt with task-specific description
+                if task_desc:
+                    sample_system_prompt = SYSTEM_PROMPT.replace("INSERT_TASK_DESC_HERE", task_desc)
+                else:
+                    raise ValueError(f"No task description found for job name: {job_name}")
 
                 messages = [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
+                    {"role": "system", "content": sample_system_prompt},
+                    {"role": "user", "content": problem},
                     {"role": "assistant", "content": str(item[1])}
                 ]
                 final_combined_data.append({
                     "images": [item[0]],
                     "correct_answer": item[1],
                     "messages": messages,
+                    "original_images": [item[2], item[3]],
                     "demo_id": item[4],
                     "demo_id_exact": item[5],
                     "demo_success": item[6],
-                    "job_name": job_name,
-                    "task_token": task_token
+                    "job_name": job_name
                 })
             combined_data = final_combined_data
             logger.info(f"Converted {len(combined_data)} pairs to message format")
@@ -1415,6 +1395,8 @@ Which image shows more task progress? Respond with a number from -100 to 100."""
                         "user_text": user_text,
                         "target": target_text,
                         "overlay_img": ex["images"][0].filename if hasattr(ex["images"][0], 'filename') else str(ex["images"][0]),
+                        "original_img1": original_imgs[0] if original_imgs else None,
+                        "original_img2": original_imgs[1] if original_imgs else None,
                     })
                 except Exception as e:
                     logger.warning(f"Failed to prepare example for logging: {e}")
@@ -1453,6 +1435,10 @@ Which image shows more task progress? Respond with a number from -100 to 100."""
                         "target": fb["target"],
                         "prediction": resp,
                     }
+                    if fb["original_img1"] and fb["original_img2"]:
+                        log_data["original_image1"] = fb["original_img1"]
+                        log_data["original_image2"] = fb["original_img2"]
+
                     logger.info(json.dumps(log_data, ensure_ascii=False))
                 logger.info("===== End Example IO =====\n")
             except Exception as e:
