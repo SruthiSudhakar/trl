@@ -37,10 +37,8 @@ echo "✅ Installation complete!"
 
 # --- Hugging Face authentication ---
 echo "🔑 Logging into Hugging Face..."
-# huggingface-cli login --token  --add-to-git-credential
 
 # --- Weights & Biases authentication ---
 echo "📊 Logging into Weights & Biases..."
-# wandb login YOUR_WANDB_TOKEN
 
 echo "✅ Installation and authentication complete!"
