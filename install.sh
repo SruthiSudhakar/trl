@@ -41,6 +41,6 @@ echo "🔑 Logging into Hugging Face..."
 
 # --- Weights & Biases authentication ---
 echo "📊 Logging into Weights & Biases..."
-wandb login YOUR_WANDB_TOKEN
+# wandb login YOUR_WANDB_TOKEN
 
 echo "✅ Installation and authentication complete!"
