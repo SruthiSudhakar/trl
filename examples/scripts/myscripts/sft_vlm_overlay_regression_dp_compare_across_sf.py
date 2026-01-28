@@ -678,8 +678,8 @@ Which image shows more task progress? Respond with a number from -100 to 100."""
                     with open(path_cache_file, 'rb') as f:
                         path_data = pickle.load(f)
                     # Fix absolute paths to be relative to current base_dataset_path  
-                    old_base = overlay_args.base_dataset_path.split('overlay_images_binary')[0]
-                    new_base = overlay_args.base_dataset_path.split('overlay_images_binary')[0]
+                    old_base = item["images"][0].split('overlay_images_binary')[0]
+                    new_base = overlay_args.base_dataset_path
                     for item in path_data:                                                                                                                                                                                          
                         # Fix overlay image path                                                                                                                                                                                    
                         item["images"] = [img.replace(old_base, new_base) for img in item["images"]]                                                                                                                                
