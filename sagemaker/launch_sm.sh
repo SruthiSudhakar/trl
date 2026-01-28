@@ -15,14 +15,15 @@ QUEUE_NAME=${4:-cv-p5en}
 INSTANCE_TYPE=${5:-p5en}     # p4d, p4de, p5, p5en, g6e, ...
 BUILD_TYPE=${6:-full}      # full / update
 VERSION=${7:-210}
-USER_NAME=fzc
+USER_NAME=sruthis
 
 # Where the VLM model and data live *inside the container*
 VLM_MODEL_PATH=${8:-"s3://tri-ml-sandbox-16011-us-west-2-datasets/sruthi_trl_training/Qwen2.5-VL-7B-Instruct"}
-VLM_BASE_DATASET_PATH=${9:-"s3://tri-ml-sandbox-16011-us-west-2-datasets/sruthi_trl_training/na_na_16_mg_place_PnPCabToCounter_mg_fixed_224"}    # root with job dirs + eval_log + frames
+VLM_BASE_DATASET_PATH=${9:-"s3://tri-ml-sandbox-16011-us-west-2-datasets/sruthi_trl_training/na_na_16_expert_fulltask_PnPCounterToStove"}    # root with job dirs + eval_log + frames
 VLM_SPLIT=${10:-"train"}                              # "train" or "val" or integer string
 VLM_OUTPUT_DIR=${11:-"/opt/ml/model/vlm_overlay_outputs"}
-
+batch_size_train=${12:-16}
+batch_size_val=${13:-16}
 ENTRY_POINT=sagemaker/train_vlm_overlay_sm.py   # new tiny wrapper, see section 4
 CONFIG=cosmos_predict2/configs/base/config.py   # PLACEHOLDER for any  config if needed
 
@@ -51,7 +52,8 @@ AWS_DEFAULT_REGION=${REGION}                            \
     --instance-type=${INSTANCE_TYPE}                    \
     --build-type=${BUILD_TYPE}                          \
     --version=${VERSION}                                \
-    \
+    --batch_size_train=${batch_size_train}              \
+    --batch_size_val=${batch_size_val}                  \
     --vlm_model_name_or_path="${VLM_MODEL_PATH}"        \
     --vlm_base_dataset_path="${VLM_BASE_DATASET_PATH}"  \
     --vlm_output_dir="${VLM_OUTPUT_DIR}"                \

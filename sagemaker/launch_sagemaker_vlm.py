@@ -71,7 +71,7 @@ def get_image(
 
     if build_type == "full":
         commands = [
-            f"{login_cmd} 763104351884.dkr.ecr.{region}.amazonaws.com",
+            f"{login_cmd} 124224456861.dkr.ecr.{region}.amazonaws.com",
             f"{login_cmd} {registry}",
             f"docker build -f {dockerfile_base} --build-arg AWS_REGION={region} -t {algorithm_name} .",
             f"docker tag {algorithm_name} {fullname}",
@@ -136,7 +136,8 @@ def parse_args():
     parser.add_argument("--vlm_base_dataset_path", type=str, required=True)
     parser.add_argument("--vlm_output_dir", type=str, default="/opt/ml/model")
     parser.add_argument("--vlm_split", type=str, default="train")
-
+    parser.add_argument("--batch_size_train", type=int, default=16)
+    parser.add_argument("--batch_size_val", type=int, default=16)
     return parser.parse_args()
 
 
@@ -236,7 +237,7 @@ def main_after_setup(args):
     instance_count = args.instance_count
     train_use_spot_instances = args.spot_instance
 
-    # Hyperparameters passed directly to sft_vlm_overlay_regression_dp_compare_across_sf.py
+    # Hyperparameters passed directly to sft_vlm_overlay_regression_v2.py
     hyperparameters = {
         "model_name_or_path": args.vlm_model_name_or_path,
         "output_dir": args.vlm_output_dir,
@@ -249,14 +250,10 @@ def main_after_setup(args):
         "gradient_accumulation_steps": 1,
         "num_train_epochs": 500,
         "learning_rate": 1e-5,
-        "per_device_train_batch_size": 8,
-        "per_device_eval_batch_size": 8,
+        "per_device_train_batch_size": args.batch_size_train,
+        "per_device_eval_batch_size": args.batch_size_val,
         "report_to": "wandb",
-        "train_val_split_index": 40,
-        "train_sample_interval": 50,
-        "compare_interval": 200,
-        "max_exact_per_demo": 50,
-        "binary_or_exact_gt": "binary",
+        "compare_interval": "4,8,12,16",
     }
 
     distribution = {
@@ -266,10 +263,10 @@ def main_after_setup(args):
     }
 
     environment = {
-        "WANDB_API_KEY": os.environ.get("WANDB_API_KEY", ""),
+        "WANDB_API_KEY": os.environ.get("WANDB_API_KEY", "465628e1cdd752aed296abe6439dedcec6fb3292"),
         "WANDB_ENTITY": os.environ.get("WANDB_ENTITY", ""),
         "WANDB__SERVICE_WAIT": "300",
-        "HF_TOKEN": os.environ.get("HF_TOKEN", ""),
+        "HF_TOKEN": os.environ.get("HF_TOKEN", "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"),
         "HF_HOME": "/tmp",
         "INSTANCE_COUNT": str(args.instance_count),
         "SM_USE_RESERVED_CAPACITY": "1",

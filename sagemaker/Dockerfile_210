@@ -69,7 +69,8 @@ RUN python3 -m pip install --no-cache-dir \
     vllm \
     wandb \
     qwen_vl_utils \
-    matplotlib
+    matplotlib \
+    decord
 
 # --------------------------
 # Environment variables
