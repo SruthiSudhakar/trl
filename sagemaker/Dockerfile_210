@@ -1,0 +1,99 @@
+# SageMaker-ready Dockerfile for TRL / VLM training
+# Base image: assume already contains Python / CUDA / TRL stack
+# FROM 124224456861.dkr.ecr.us-west-2.amazonaws.com/sruthis/trl_training:latest
+
+# FROM 763104351884.dkr.ecr.${AWS_REGION}.amazonaws.com/pytorch-training:2.7.1-gpu-py312-cu128-ubuntu22.04-sagemaker
+# FROM 763104351884.dkr.ecr.${AWS_REGION}.amazonaws.com/huggingface-pytorch-training:2.1.0-transformers4.36.0-gpu-py310-cu121-ubuntu20.04
+FROM 763104351884.dkr.ecr.us-west-2.amazonaws.com/pytorch-training:2.2.0-gpu-py310-cu121-ubuntu20.04-sagemaker-v1.36
+
+# --------------------------
+# System-level dependencies
+# --------------------------
+RUN apt-get update && \
+    apt-get install -y \
+        curl \
+        git \
+        git-lfs \
+        wget \
+        software-properties-common \
+        ffmpeg \
+        libsndfile1-dev \
+        python3-pip \
+        python3-venv \
+    && apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN git lfs install
+
+# --------------------------
+# Python tooling (install.sh part 1)
+# --------------------------
+# Upgrade pip toolchain (equivalent to: python3 -m pip install --upgrade pip setuptools wheel)
+RUN python3 -m pip install --upgrade pip setuptools wheel
+
+# Enable HF Hub online mode by default (can be overridden at runtime)
+ENV HF_HUB_OFFLINE=0
+
+# --------------------------
+# Copy repo into container
+# --------------------------
+# SageMaker will also copy code to /opt/ml/code at runtime, but this makes the image usable locally too.
+ENV SAGEMAKER_SUBMIT_DIRECTORY=/opt/ml/code
+WORKDIR ${SAGEMAKER_SUBMIT_DIRECTORY}
+COPY . ${SAGEMAKER_SUBMIT_DIRECTORY}
+
+# --------------------------
+# Core installs from your original Dockerfile (optional, but safe)
+# If sruthis/trl_training already has these, this is effectively a refresh.
+# --------------------------
+RUN python3 -m pip install --no-cache-dir \
+    bitsandbytes \
+    optimum \
+    auto-gptq \
+    librosa \
+    "soundfile>=0.12.1" \
+    scipy \
+    transformers \
+    accelerate \
+    peft \
+    "trl[test]@git+https://github.com/huggingface/trl"
+
+# --------------------------
+# Extra packages from install.sh
+# (install.sh part 2)
+# --------------------------
+RUN python3 -m pip install --no-cache-dir \
+    deepspeed \
+    math-verify \
+    latex2sympy2_extended \
+    vllm \
+    wandb \
+    qwen_vl_utils \
+    matplotlib
+
+# --------------------------
+# Environment variables
+# --------------------------
+ENV PYTHONPATH=${SAGEMAKER_SUBMIT_DIRECTORY}:${PYTHONPATH} \
+    HF_HOME=/tmp \
+    TOKENIZERS_PARALLELISM=false
+
+# IMPORTANT: we DO NOT bake credentials into the image.
+# Instead, SageMaker job should provide:
+#   - HF_TOKEN
+#   - WANDB_API_KEY
+# via Estimator.environment or job-level secrets.
+#
+# Example in your launch_sagemaker_vlm.py:
+# environment = {
+#     "HF_TOKEN": os.environ.get("HF_TOKEN", ""),
+#     "WANDB_API_KEY": os.environ.get("WANDB_API_KEY", ""),
+#     "WANDB_ENTITY": os.environ.get("WANDB_ENTITY", ""),
+# }
+
+# Mark repo as a safe git directory (avoids "detected dubious ownership" warnings)
+RUN git config --global --add safe.directory ${SAGEMAKER_SUBMIT_DIRECTORY}
+
+# CMD is ignored by SageMaker (it overrides with the training entry point),
+# but we leave something harmless here.
+CMD ["python", "-c", "print('SageMaker TRL/VLM image built successfully.')"]
