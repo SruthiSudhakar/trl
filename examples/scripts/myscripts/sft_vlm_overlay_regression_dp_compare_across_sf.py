@@ -58,15 +58,13 @@ Usage:
 #     --train_val_split_index 
 #     --train_sample_interval 1 \
 #     --compare_interval 4,8,12,16 \
-#     --max_exact_per_demo 50 \
-#     --binary_or_exact_gt binary
 
 just to load data
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --num_processes=8 --gpu_ids=0,1,2,3,4,5,6,7 \
     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/myscripts/sft_vlm_overlay_regression_dp_compare_across_sf.py \
     --model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
-    --base_dataset_path "/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_mg_place_PnPCabToCounter_mg_fixed_224" \
+    --base_dataset_path "/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToStove,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPStoveToCounter,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToMicrowave,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPMicrowaveToCounter,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToSink,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPSinkToCounter,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCoffeeServeMug,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCloseDrawer,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCabToCounter,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToCab" \
     --output_dir "outputs/TEST_$(date +%Y%m%d_%H%M%S)" \
     --eval_strategy steps \
     --logging_steps 1 \
@@ -79,11 +77,70 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --num_processes=8 --gpu_i
     --per_device_eval_batch_size 8 \
     --report_to wandb \
     --split train \
-    --train_val_split_index 40 \
-    --train_sample_interval 50 \
-    --compare_interval 200 \
-    --max_exact_per_demo 50 \
-    --binary_or_exact_gt binary 
+    --train_val_split_index 1 \
+    --train_sample_interval 1 \
+    --compare_interval 4,8,12,16 \
+
+CUDA_VISIBLE_DEVICES=0 accelerate launch --num_processes=1 --gpu_ids=0 \
+    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
+    examples/scripts/myscripts/sft_vlm_overlay_regression_dp_compare_across_sf.py \
+    --model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
+    --base_dataset_path "/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToStove" \
+    --output_dir "outputs/TEST_$(date +%Y%m%d_%H%M%S)" \
+    --eval_strategy steps \
+    --logging_steps 1 \
+    --eval_steps 1 \
+    --save_steps 1 \
+    --gradient_accumulation_steps 1 \
+    --num_train_epochs 500 \
+    --learning_rate 1e-5 \
+    --per_device_train_batch_size 8 \
+    --per_device_eval_batch_size 8 \
+    --report_to wandb \
+    --split train \
+    --train_sample_interval 1 \
+    --compare_interval 4,8,12,16 \
+    --push_to_hub_dataset "ss6638/na_na_16_expert_fulltask_PnPCounterToStove_train" \
+    --max_shard_size "2GB" \
+    --just_prepare_data
+
+# ============================================================================
+# DATASET EXPORT OPTIONS (for AWS SageMaker / cloud training)
+# ============================================================================
+
+# Option 1: Push to HuggingFace Hub (RECOMMENDED)
+# - Uploads once, then load from anywhere with load_dataset()
+# - Images embedded in efficient Parquet format
+# - Use --just_prepare_data to skip training after export
+python examples/scripts/myscripts/sft_vlm_overlay_regression_dp_compare_across_sf.py \
+    --base_dataset_path "/path/to/your/data" \
+    --push_to_hub_dataset "your-username/robot-overlay-dataset" \
+    --max_shard_size "2GB" \
+    --just_prepare_data \
+    --model_name_or_path "Qwen/Qwen2.5-VL-7B-Instruct" \
+    --output_dir "outputs/export"
+
+# On SageMaker, load with:
+#   from datasets import load_dataset
+#   dataset = load_dataset("your-username/robot-overlay-dataset", token="your_token")
+
+# Option 2: Save as Parquet locally, then upload to S3
+# - Creates a few large parquet files instead of 1M small PNGs
+# - Much faster S3 upload: aws s3 sync parquet_dir/ s3://bucket/dataset/
+python examples/scripts/myscripts/sft_vlm_overlay_regression_dp_compare_across_sf.py \
+    --base_dataset_path "/path/to/your/data" \
+    --save_as_parquet "/path/to/output/parquet_dataset" \
+    --max_shard_size "2GB" \
+    --just_prepare_data \
+    --model_name_or_path "Qwen/Qwen2.5-VL-7B-Instruct" \
+    --output_dir "outputs/export"
+
+# Then upload to S3:
+#   aws s3 sync /path/to/output/parquet_dataset s3://your-bucket/dataset/
+#
+# On SageMaker, load with:
+#   from datasets import load_dataset
+#   dataset = load_dataset("parquet", data_files="s3://your-bucket/dataset/*.parquet")
 
 """
 
@@ -523,10 +580,14 @@ if __name__ == "__main__":
         compare_interval: str = "16"  # can be a single int (e.g., "16") or comma-separated list (e.g., "4,8,12,16")
         train_val_split_index: int = 5  # index to split job directories into train/val sets
         base_dataset_path: str = ''#/workspace/guided_diffusion_policy/externals/robocasa/datasets/v0.1/single_stage/kitchen_pnp/PnPStoveToCounter/2024-05-01'  # base path to dataset directory
-        max_exact_per_demo: int = 2  # maximum number of demo_id_exact per demo_id to keep in the dataset
-        binary_or_exact_gt: str = "exact"
+        max_exact_per_demo: int = 50  # maximum number of demo_id_exact per demo_id to keep in the dataset
+        binary_or_exact_gt: str = "binary"
         debug_samples: int = -1
         just_prepare_data: bool = False
+        # Dataset export options for AWS/SageMaker
+        push_to_hub_dataset: str = ""  # HF Hub repo name (e.g., "username/dataset-name") to push dataset to
+        save_as_parquet: str = ""  # Local path to save dataset as parquet files
+        max_shard_size: str = "2GB"  # Max size per parquet shard
 
     parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig, OverlayArguments))
     script_args, training_args, model_args, overlay_args = parser.parse_args_and_config()
@@ -678,11 +739,11 @@ Which image shows more task progress? Respond with a number from -100 to 100."""
                     with open(path_cache_file, 'rb') as f:
                         path_data = pickle.load(f)
                     # Fix absolute paths to be relative to current base_dataset_path  
-                    old_base = item["images"][0].split('overlay_images_binary')[0]
-                    new_base = overlay_args.base_dataset_path
-                    for item in path_data:                                                                                                                                                                                          
-                        # Fix overlay image path                                                                                                                                                                                    
-                        item["images"] = [img.replace(old_base, new_base) for img in item["images"]]                                                                                                                                
+                    # old_base = item["images"][0].split('overlay_images_binary')[0]
+                    # new_base = overlay_args.base_dataset_path
+                    # for item in path_data:                                                                                                                                                                                          
+                    #     # Fix overlay image path                                                                                                                                                                                    
+                    #     item["images"] = [img.replace(old_base, new_base) for img in item["images"]]                                                                                                                                
 
                     logger.info(f"  Loaded {len(path_data)} pairs from {dataset_path}")
                     combined_data.extend(path_data)
@@ -1217,11 +1278,6 @@ Which image shows more task progress? Respond with a number from -100 to 100."""
             import traceback
             traceback.print_exc()
 
-    if overlay_args.just_prepare_data:
-        logger.info(f"Rank {local_rank}: Data preparation and visualization complete. Exiting as requested by --just_prepare_data")
-        import sys
-        sys.exit(0)
-
     # Combine success and failure data
     logger.info(f"Rank {local_rank}: Dataset ready with {len(combined_data)} pairs")
 
@@ -1275,6 +1331,107 @@ Which image shows more task progress? Respond with a number from -100 to 100."""
     # Cast to lazy image loading BEFORE any operations to avoid loading images into memory
     logger.info(f"Rank {local_rank}: Casting images column to lazy loading format...")
     dataset = dataset.cast_column("images", hf_datasets.Sequence(hf_datasets.Image()))
+
+    # ============================================================================================
+    # DATASET EXPORT: Push to HuggingFace Hub or save as Parquet for AWS/SageMaker
+    # ============================================================================================
+    # Only rank 0 handles export to avoid duplicate uploads/writes
+    if local_rank == 0:
+        pdb.set_trace()
+        # Option 1: Push to HuggingFace Hub
+        if overlay_args.push_to_hub_dataset:
+            logger.info("="*80)
+            logger.info(f"Pushing dataset to HuggingFace Hub: {overlay_args.push_to_hub_dataset}")
+            logger.info(f"Dataset size: {len(dataset)} samples")
+            logger.info(f"Max shard size: {overlay_args.max_shard_size}")
+            logger.info("="*80)
+            try:
+                dataset.push_to_hub(
+                    overlay_args.push_to_hub_dataset,
+                    private=True,
+                    max_shard_size=overlay_args.max_shard_size,
+                )
+                logger.info(f"Successfully pushed dataset to: https://huggingface.co/datasets/{overlay_args.push_to_hub_dataset}")
+            except Exception as e:
+                logger.error(f"Failed to push dataset to Hub: {e}")
+                logger.error("Make sure you're logged in with `huggingface-cli login` or HF_TOKEN env var")
+                raise
+
+        # Option 2: Save as Parquet files locally (for S3 upload)
+        if overlay_args.save_as_parquet:
+            parquet_path = Path(overlay_args.save_as_parquet)
+            parquet_path.mkdir(parents=True, exist_ok=True)
+            logger.info("="*80)
+            logger.info(f"Saving dataset to: {parquet_path}")
+            logger.info(f"Dataset size: {len(dataset)} samples")
+            logger.info(f"Max shard size: {overlay_args.max_shard_size}")
+            logger.info("="*80)
+            try:
+                # Save as Arrow format with sharding - most efficient for large datasets
+                # This creates multiple shard files automatically based on max_shard_size
+                arrow_path = parquet_path / "arrow_format"
+                dataset.save_to_disk(
+                    str(arrow_path),
+                    max_shard_size=overlay_args.max_shard_size,
+                )
+                logger.info(f"Saved Arrow format to: {arrow_path}")
+
+                # Also export as parquet for flexibility (single file per shard)
+                # Calculate number of shards based on max_shard_size
+                try:
+                    # Parse max_shard_size (e.g., "2GB" -> 2 * 1024^3 bytes)
+                    size_str = overlay_args.max_shard_size.upper()
+                    if "GB" in size_str:
+                        max_bytes = float(size_str.replace("GB", "")) * (1024**3)
+                    elif "MB" in size_str:
+                        max_bytes = float(size_str.replace("MB", "")) * (1024**2)
+                    else:
+                        max_bytes = 2 * (1024**3)  # Default 2GB
+
+                    # Estimate dataset size (rough: ~100KB per image sample)
+                    estimated_size = len(dataset) * 100 * 1024
+                    num_shards = max(1, int(estimated_size / max_bytes) + 1)
+
+                    logger.info(f"Creating {num_shards} parquet shard(s)...")
+                    for shard_idx in range(num_shards):
+                        shard = dataset.shard(num_shards=num_shards, index=shard_idx)
+                        shard_file = parquet_path / f"data-{shard_idx:05d}-of-{num_shards:05d}.parquet"
+                        shard.to_parquet(str(shard_file))
+                        logger.info(f"  Saved shard {shard_idx + 1}/{num_shards}: {shard_file}")
+                except Exception as e:
+                    logger.warning(f"Failed to create parquet shards, using single file: {e}")
+                    dataset.to_parquet(str(parquet_path / "data.parquet"))
+
+                logger.info(f"Successfully saved dataset to: {parquet_path}")
+                logger.info(f"")
+                logger.info(f"To upload to S3:")
+                logger.info(f"  aws s3 sync {parquet_path} s3://your-bucket/dataset/")
+                logger.info(f"")
+                logger.info(f"To load on SageMaker (Arrow format - faster):")
+                logger.info(f"  from datasets import load_from_disk")
+                logger.info(f"  dataset = load_from_disk('s3://your-bucket/dataset/arrow_format')")
+                logger.info(f"")
+                logger.info(f"To load on SageMaker (Parquet format):")
+                logger.info(f"  from datasets import load_dataset")
+                logger.info(f"  dataset = load_dataset('parquet', data_files='s3://your-bucket/dataset/*.parquet')")
+            except Exception as e:
+                logger.error(f"Failed to save dataset: {e}")
+                raise
+
+        # Exit if only preparing data (no training)
+        if overlay_args.push_to_hub_dataset or overlay_args.save_as_parquet:
+            if overlay_args.just_prepare_data:
+                logger.info("Dataset export complete. Exiting as requested by --just_prepare_data")
+                import sys
+                sys.exit(0)
+
+    # Synchronize after export before continuing to training
+    if world_size > 1 and (overlay_args.push_to_hub_dataset or overlay_args.save_as_parquet):
+        try:
+            dist.barrier()
+            logger.info(f"Rank {local_rank}: Synchronized after dataset export")
+        except Exception as e:
+            logger.warning(f"Failed to synchronize: {e}")
 
     # Smaller test split to reduce memory per GPU
     test_size = max(2, len(dataset) // 20)

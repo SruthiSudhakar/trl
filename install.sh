@@ -31,7 +31,8 @@ pip3 install \
     vllm \
     wandb \
     qwen_vl_utils \
-    matplotlib
+    matplotlib \
+    decord
 
 echo "✅ Installation complete!"
 
