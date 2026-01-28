@@ -677,13 +677,12 @@ Which image shows more task progress? Respond with a number from -100 to 100."""
                 try:
                     with open(path_cache_file, 'rb') as f:
                         path_data = pickle.load(f)
-                    # # Fix absolute paths to be relative to current base_dataset_path  
-                    # old_base = overlay_args.base_dataset_path.split('overlay_images_binary')[0]
-                    # pdb.set_trace()
-                    # new_base = '' # overlay_args.base_dataset_path.split('overlay_images_binary')[0]
-                    # for item in path_data:                                                                                                                                                                                          
-                    #     # Fix overlay image path                                                                                                                                                                                    
-                    #     item["images"] = [img.replace(old_base, new_base) for img in item["images"]]                                                                                                                                
+                    # Fix absolute paths to be relative to current base_dataset_path  
+                    old_base = overlay_args.base_dataset_path.split('overlay_images_binary')[0]
+                    new_base = overlay_args.base_dataset_path.split('overlay_images_binary')[0]
+                    for item in path_data:                                                                                                                                                                                          
+                        # Fix overlay image path                                                                                                                                                                                    
+                        item["images"] = [img.replace(old_base, new_base) for img in item["images"]]                                                                                                                                
 
                     logger.info(f"  Loaded {len(path_data)} pairs from {dataset_path}")
                     combined_data.extend(path_data)
@@ -1415,6 +1414,8 @@ Which image shows more task progress? Respond with a number from -100 to 100."""
                         "user_text": user_text,
                         "target": target_text,
                         "overlay_img": ex["images"][0].filename if hasattr(ex["images"][0], 'filename') else str(ex["images"][0]),
+                        "original_img1": original_imgs[0] if original_imgs else None,
+                        "original_img2": original_imgs[1] if original_imgs else None,
                     })
                 except Exception as e:
                     logger.warning(f"Failed to prepare example for logging: {e}")
@@ -1453,6 +1454,10 @@ Which image shows more task progress? Respond with a number from -100 to 100."""
                         "target": fb["target"],
                         "prediction": resp,
                     }
+                    if fb["original_img1"] and fb["original_img2"]:
+                        log_data["original_image1"] = fb["original_img1"]
+                        log_data["original_image2"] = fb["original_img2"]
+
                     logger.info(json.dumps(log_data, ensure_ascii=False))
                 logger.info("===== End Example IO =====\n")
             except Exception as e:
