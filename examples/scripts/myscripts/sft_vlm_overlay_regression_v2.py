@@ -1,6 +1,6 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
@@ -31,11 +31,20 @@ Trains a VLM to compare side-by-side robot frames and predict task completion pr
 Frames are decoded from MP4 videos on-the-fly during training (no pre-generated overlays).
 
 Usage:
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --num_processes=8 --gpu_ids=0,1,2,3,4,5,6,7 \
+
+aws s3 cp guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToStove/failure_filter_stats.json \
+    s3://tri-ml-sandbox-16011-us-west-2-datasets/sruthi_trl_training/na_na_16_expert_fulltask_PnPCounterToStove/failure_filter_stats.json \
+    --exclude "*" \
+    --include "*/eval_log.json" \
+    --include "*.mp4" \
+    --recursive
+
+
+CUDA_VISIBLE_DEVICES=0 accelerate launch --num_processes=1 --gpu_ids=0 \
     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/myscripts/sft_vlm_overlay_regression_v2.py \
     --model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
-    --base_dataset_path "/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToStove" \
+    --base_dataset_path "/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToStove,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPStoveToCounter,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToMicrowave,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPMicrowaveToCounter,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToSink,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPSinkToCounter,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCoffeeServeMug,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCloseDrawer,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCabToCounter,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToCab" \
     --output_dir "outputs/TEST_$(date +%Y%m%d_%H%M%S)" \
     --eval_strategy steps \
     --logging_steps 500 \
@@ -48,9 +57,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --num_processes=8 --gpu_i
     --per_device_eval_batch_size 8 \
     --report_to wandb \
     --split train \
-    --train_sample_interval 1 \
-    --compare_interval 4,8,12,16 \
-    --max_exact_per_demo 50
+    --compare_interval 4,8,12,16 
 """
 
 import ast
@@ -65,6 +72,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Union
+import pdb
 
 import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
@@ -87,7 +95,7 @@ from trl import (
 )
 from trl.trainer.sft_trainer import DataCollatorForVisionLanguageModeling
 
-from video_frame_utils import create_side_by_side, extract_frame, get_frame_source
+from video_frame_utils import create_side_by_side, extract_frame, get_frame_source, find_job_dirs, read_s3_json
 
 # Set random seed for reproducibility
 random.seed(42)
@@ -177,14 +185,21 @@ def load_trajectories(job_dirs):
     unfiltered_failure_data = []
 
     for job_dir in job_dirs:
-        job_name = Path(job_dir).name
-        metadata_path = Path(job_dir) / "eval_log.json"
-        if not metadata_path.exists():
-            logger.warning(f"Metadata file not found for {job_name}, skipping...")
-            continue
-
-        with open(metadata_path, "r") as f:
-            all_metadata = json.load(f)
+        job_name = job_dir.rstrip("/").split("/")[-1]
+        if job_dir.startswith("s3://"):
+            metadata_uri = job_dir.rstrip("/") + "/eval_log.json"
+            try:
+                all_metadata = read_s3_json(metadata_uri)
+            except Exception:
+                logger.warning(f"Metadata file not found for {job_name}, skipping...")
+                continue
+        else:
+            metadata_path = Path(job_dir) / "eval_log.json"
+            if not metadata_path.exists():
+                logger.warning(f"Metadata file not found for {job_name}, skipping...")
+                continue
+            with open(metadata_path, "r") as f:
+                all_metadata = json.load(f)
 
         for key, value in all_metadata.items():
             if not key.startswith("train/sim_reward_trajectory_"):
@@ -351,7 +366,8 @@ def build_frame_pairs(
                 if NUM_FRAMES <= interval:
                     continue
                 max_idx1 = one_demo["trajectory_index"] - interval - 1
-                for idx1 in range(0, max_idx1 + 1, train_sample_interval):
+                offset = random.randint(0, train_sample_interval - 1)
+                for idx1 in range(offset, max_idx1 + 1, train_sample_interval):
                     idx2 = idx1 + interval
                     correct_answer = 32
 
@@ -385,7 +401,8 @@ def build_frame_pairs(
             max_idx1 = one_demo["trajectory_index"] - 1
             beginning_of_failure = None
 
-            for idx1 in range(0, max_idx1 + 1, train_sample_interval):
+            offset = random.randint(0, train_sample_interval - 1)
+            for idx1 in range(offset, max_idx1 + 1, train_sample_interval):
                 # Compare failure frame vs success frame at same index
                 try:
                     fail_img = extract_frame(source, idx1)
@@ -778,11 +795,12 @@ if __name__ == "__main__":
         include_successes: bool = True
         include_failures: bool = True
         train_sample_interval: int = 5
-        compare_interval: str = "16"
+        compare_interval: str = "4,8,12,16"
         train_val_split_index: int = 5
         base_dataset_path: str = ""
         max_exact_per_demo: int = 50
         debug_samples: int = -1
+        just_visualize: bool = False
 
     parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig, OverlayArguments))
     script_args, training_args, model_args, overlay_args = parser.parse_args_and_config()
@@ -804,6 +822,7 @@ if __name__ == "__main__":
     logger.info(f"Compare intervals: {compare_intervals}")
     logger.info(f"Sample interval: {overlay_args.train_sample_interval}")
     logger.info(f"Base dataset path: {overlay_args.base_dataset_path}")
+    logger.info(f"Just visualize: {overlay_args.just_visualize}")
 
     # ============================
     # Distributed setup
@@ -822,73 +841,123 @@ if __name__ == "__main__":
     logger.info(f"Rank {local_rank} of {world_size}")
 
     # ============================
-    # Load trajectories
+    # Parse multiple task dataset paths (comma-separated)
     # ============================
-    all_dirs = sorted(glob.glob(f"{overlay_args.base_dataset_path}/*"))
-    job_dirs = [d for d in all_dirs if os.path.isdir(d) and os.path.exists(os.path.join(d, "eval_log.json"))]
+    task_paths = [p.strip() for p in overlay_args.base_dataset_path.split(",") if p.strip()]
+    logger.info(f"Processing {len(task_paths)} task dataset path(s): {task_paths}")
 
     split = overlay_args.split
-    if split == "val":
-        job_dirs = job_dirs[-overlay_args.train_val_split_index :]
-    elif split == "train":
-        job_dirs = job_dirs[: -overlay_args.train_val_split_index]
-    else:
-        job_dirs = job_dirs[: int(split)]
+    combined_data = []
 
-    logger.info(f"Found {len(job_dirs)} job directories for {split} split")
+    for task_idx, task_path in enumerate(task_paths):
+        logger.info("=" * 60)
+        logger.info(f"[Task {task_idx + 1}/{len(task_paths)}] Processing: {task_path}")
+        logger.info("=" * 60)
 
-    success_data, unfiltered_failure_data = load_trajectories(job_dirs)
-    logger.info(f"Loaded {len(success_data)} success + {len(unfiltered_failure_data)} failure trajectories")
+        # ============================
+        # Load trajectories for this task
+        # ============================
+        job_dirs = find_job_dirs(task_path)
+        if split == "val":
+            job_dirs = job_dirs[-overlay_args.train_val_split_index :]
+        elif split == "train":
+            job_dirs = job_dirs[: -overlay_args.train_val_split_index]
+        else:
+            job_dirs = job_dirs[: int(split)]
 
-    failure_data = match_failures_to_successes(success_data, unfiltered_failure_data)
-    logger.info(f"Matched {len(failure_data)} failures to success trajectories")
+        logger.info(f"Found {len(job_dirs)} job directories for {split} split in {task_path}")
 
-    # ============================
-    # Balanced sampling
-    # ============================
-    success_data, failure_data, success_by_demo, failure_by_demo = balance_by_demo_id(
-        success_data, failure_data, overlay_args.max_exact_per_demo
-    )
+        if len(job_dirs) == 0:
+            logger.warning(f"No job directories found in {task_path}, skipping...")
+            continue
 
-    # Debug mode: subsample
-    if overlay_args.debug_samples > -1:
-        success_data = random.sample(success_data, min(len(success_data), overlay_args.debug_samples))
-        failure_data = random.sample(failure_data, min(len(failure_data), overlay_args.debug_samples))
+        success_data, unfiltered_failure_data = load_trajectories(job_dirs)
+        logger.info(f"Loaded {len(success_data)} success + {len(unfiltered_failure_data)} failure trajectories")
 
-    # ============================
-    # Compute failure filter stats
-    # ============================
-    stats_cache_file = Path(overlay_args.base_dataset_path) / "failure_filter_stats.json"
-    if stats_cache_file.exists():
-        logger.info(f"Loading cached failure filter stats from {stats_cache_file}")
-        with open(stats_cache_file, "r") as f:
-            cached = json.load(f)
-            success_mean_diffs_at_idx = cached["success_mean_diffs_at_idx"]
-    else:
-        logger.info("Computing failure filter stats...")
-        success_mean_diffs_at_idx = compute_failure_filter_stats(
-            success_by_demo, failure_by_demo, local_rank, world_size
+        failure_data = match_failures_to_successes(success_data, unfiltered_failure_data)
+        logger.info(f"Matched {len(failure_data)} failures to success trajectories")
+
+        # ============================
+        # Balanced sampling for this task
+        # ============================
+        success_data, failure_data, success_by_demo, failure_by_demo = balance_by_demo_id(
+            success_data, failure_data, overlay_args.max_exact_per_demo
         )
-        if local_rank == 0:
-            with open(stats_cache_file, "w") as f:
-                json.dump({"success_mean_diffs_at_idx": success_mean_diffs_at_idx}, f)
-            logger.info(f"Saved failure filter stats to {stats_cache_file}")
+
+        # Debug mode: subsample
+        if overlay_args.debug_samples > -1:
+            success_data = random.sample(success_data, min(len(success_data), overlay_args.debug_samples))
+            failure_data = random.sample(failure_data, min(len(failure_data), overlay_args.debug_samples))
+
+        # ============================
+        # Compute failure filter stats for this task
+        # ============================
+        stats_cache_file = Path(task_path) / "failure_filter_stats.json"
+        if stats_cache_file.exists():
+            logger.info(f"Loading cached failure filter stats from {stats_cache_file}")
+            with open(stats_cache_file, "r") as f:
+                cached = json.load(f)
+                success_mean_diffs_at_idx = cached["success_mean_diffs_at_idx"]
+        else:
+            logger.info("Computing failure filter stats...")
+            success_mean_diffs_at_idx = compute_failure_filter_stats(
+                success_by_demo, failure_by_demo, local_rank, world_size
+            )
+            if local_rank == 0:
+                with open(stats_cache_file, "w") as f:
+                    json.dump({"success_mean_diffs_at_idx": success_mean_diffs_at_idx}, f)
+                logger.info(f"Saved failure filter stats to {stats_cache_file}")
+
+        # ============================
+        # Build frame pair metadata for this task
+        # ============================
+        job_name = Path(job_dirs[0]).name if job_dirs else ""
+        task_combined_data = build_frame_pairs(
+            success_data=success_data,
+            failure_data=failure_data,
+            compare_intervals=compare_intervals,
+            train_sample_interval=overlay_args.train_sample_interval,
+            success_mean_diffs_at_idx=success_mean_diffs_at_idx,
+            job_name=job_name,
+            local_rank=local_rank,
+            world_size=world_size,
+        )
+        logger.info(f"Built {len(task_combined_data)} frame pairs for task: {job_name}")
+        combined_data.extend(task_combined_data)
+
+    logger.info(f"Total frame pairs across all tasks: {len(combined_data)}")
 
     # ============================
-    # Build frame pair metadata
+    # Balance samples across tasks
     # ============================
-    job_name = Path(job_dirs[0]).name if job_dirs else ""
-    combined_data = build_frame_pairs(
-        success_data=success_data,
-        failure_data=failure_data,
-        compare_intervals=compare_intervals,
-        train_sample_interval=overlay_args.train_sample_interval,
-        success_mean_diffs_at_idx=success_mean_diffs_at_idx,
-        job_name=job_name,
-        local_rank=local_rank,
-        world_size=world_size,
-    )
-    logger.info(f"Built {len(combined_data)} frame pairs")
+    if len(task_paths) > 1 and len(combined_data) > 0:
+        samples_by_task = defaultdict(list)
+        for item in combined_data:
+            samples_by_task[item["task_token"]].append(item)
+
+        task_counts = {t: len(items) for t, items in samples_by_task.items()}
+        mean_count = int(sum(task_counts.values()) / len(task_counts))
+        max_count = int(mean_count)
+
+        logger.info(f"Per-task sample counts before balancing: {task_counts}")
+        logger.info(f"Mean: {mean_count}, Cap (mean): {max_count}")
+
+        balanced_data = []
+        for task_token, items in samples_by_task.items():
+            if len(items) > max_count:
+                logger.info(f"Downsampling {task_token}: {len(items)} -> {max_count}")
+                rng = random.Random(42)
+                items = rng.sample(items, max_count)
+            balanced_data.extend(items)
+
+        logger.info(f"After cross-task balancing: {len(combined_data)} -> {len(balanced_data)}")
+        combined_data = balanced_data
+
+    # ============================
+    # Shuffle + shard
+    # ============================
+    random.seed(42)
+    random.shuffle(combined_data)
 
     # ============================
     # Visualize dataset (rank 0 only, before sharding)
@@ -899,11 +968,8 @@ if __name__ == "__main__":
         except Exception as e:
             logger.warning(f"Failed to generate visualizations: {e}")
 
-    # ============================
-    # Shuffle + shard
-    # ============================
-    random.seed(42)
-    random.shuffle(combined_data)
+    if overlay_args.just_visualize:
+        sys.exit(0)
 
     if world_size > 1:
         total = len(combined_data)

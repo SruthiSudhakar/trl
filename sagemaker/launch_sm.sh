@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+#  # Default — no image rebuild, code uploaded from local source_dir:
+# bash sagemaker/launch_sm.sh 1 sruthis sruthis cv-p5en p5en
+# Force full image rebuild (when pip deps change):
+# bash sagemaker/launch_sm.sh 1 sruthis sruthis cv-p5en p5en full
+
 set -e
 
 # NOTE: these unset are important; if not done AWS_PROFILE set in launcher will be ignored
@@ -13,12 +18,12 @@ NAME=$3               # short job name suffix
 
 QUEUE_NAME=${4:-cv-p5en}
 INSTANCE_TYPE=${5:-p5en}     # p4d, p4de, p5, p5en, g6e, ...
-BUILD_TYPE=${6:-full}      # full / update
+BUILD_TYPE=${6:-None}      # full / update
 VERSION=${7:-210}
 USER_NAME=sruthis
 
 # Where the VLM model and data live *inside the container*
-VLM_MODEL_PATH=${8:-"s3://tri-ml-sandbox-16011-us-west-2-datasets/sruthi_trl_training/Qwen2.5-VL-7B-Instruct"}
+VLM_MODEL_PATH=${8:-"Qwen/Qwen2.5-VL-7B-Instruct"}
 VLM_BASE_DATASET_PATH=${9:-"s3://tri-ml-sandbox-16011-us-west-2-datasets/sruthi_trl_training/na_na_16_expert_fulltask_PnPCounterToStove"}    # root with job dirs + eval_log + frames
 VLM_SPLIT=${10:-"train"}                              # "train" or "val" or integer string
 VLM_OUTPUT_DIR=${11:-"/opt/ml/model/vlm_overlay_outputs"}

@@ -1,0 +1,41 @@
+.git
+**/.git
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pt
+**/*.pth
+**/*.ckpt
+**/*.safetensors
+**/*.tar
+**/*.tar.gz
+**/*.zip
+
+# common caches
+.cache
+**/.cache
+wandb
+**/wandb
+mlruns
+**/mlruns
+outputs
+**/outputs
+checkpoints
+**/checkpoints
+tmp
+**/tmp
+
+# if you have datasets locally
+data
+dataset
+datasets
+**/data
+**/dataset
+**/datasets
+
+# AWS CLI artifacts
+aws
+awscliv2.zip
+setup.py
+setup.cfg
+pyproject.toml

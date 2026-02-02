@@ -11,7 +11,7 @@ from sagemaker import Session as sm_Session
 from sagemaker.pytorch import PyTorch
 
 try:
-    from sagemaker.batch_queueing.queue import Queue
+    from sagemaker.aws_batch.training_queue import TrainingQueue as Queue
     IS_SM_QUEUE = True
 except Exception as e:
     print(f"Could not load SageMaker batch queueing: {e}.")
@@ -39,7 +39,7 @@ def get_image(
     user: str,
     instance_type: str,
     version: str = "271",
-    build_type: str = "full",
+    build_type: str = "None",
     profile: str = "default",
     region: str = "us-west-2",
 ) -> str:
@@ -63,7 +63,7 @@ def get_image(
 
     fullname = f"{account}.dkr.ecr.{region}.amazonaws.com/{algorithm_name}:latest"
 
-    if build_type is None:
+    if build_type == "None":
         return fullname
 
     login_cmd = f"aws ecr get-login-password --region {region} --profile {profile} | docker login --username AWS --password-stdin"

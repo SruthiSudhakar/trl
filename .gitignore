@@ -147,3 +147,6 @@ checklink/cookies.txt
 nbs/wandb/
 examples/notebooks/wandb/
 wandb/
+aws/
+awscliv2.zip
+chown.sh

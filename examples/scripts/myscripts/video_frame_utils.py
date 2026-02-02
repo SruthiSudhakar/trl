@@ -6,10 +6,14 @@ Supports two source types:
 - PNG directories: fallback for pre-extracted frames (frame_000000.png, etc.)
 """
 
+import hashlib
 import os
+import tempfile
 from functools import lru_cache
 
 from PIL import Image
+
+_S3_VIDEO_CACHE_DIR = os.path.join(tempfile.gettempdir(), "video_s3_cache")
 
 
 @lru_cache(maxsize=256)
@@ -81,3 +85,78 @@ def get_frame_source(video_path: str) -> str:
     if os.path.isdir(png_dir):
         return png_dir
     raise FileNotFoundError(f"Neither {video_path} nor {png_dir} found")
+
+import os
+import glob
+import boto3
+from urllib.parse import urlparse
+
+s3 = boto3.client("s3")
+
+def parse_s3_uri(uri: str):
+    # uri like s3://bucket/some/prefix
+    u = urlparse(uri)
+    bucket = u.netloc
+    prefix = u.path.lstrip("/")
+    if prefix and not prefix.endswith("/"):
+        prefix += "/"
+    return bucket, prefix
+
+def s3_list_immediate_subprefixes(bucket: str, prefix: str):
+    """
+    Lists "directories" immediately under prefix using Delimiter='/'
+    Returns list of prefixes like 'some/prefix/job123/'
+    """
+    subprefixes = []
+    token = None
+    while True:
+        kwargs = dict(Bucket=bucket, Prefix=prefix, Delimiter="/")
+        if token:
+            kwargs["ContinuationToken"] = token
+        resp = s3.list_objects_v2(**kwargs)
+
+        for cp in resp.get("CommonPrefixes", []):
+            subprefixes.append(cp["Prefix"])
+
+        if resp.get("IsTruncated"):
+            token = resp.get("NextContinuationToken")
+        else:
+            break
+    return subprefixes
+
+def s3_key_exists(bucket: str, key: str) -> bool:
+    try:
+        s3.head_object(Bucket=bucket, Key=key)
+        return True
+    except Exception:
+        return False
+
+def read_s3_json(uri: str):
+    """Read a JSON file from S3 and return the parsed object."""
+    import json
+    bucket, prefix = parse_s3_uri(uri)
+    # parse_s3_uri adds trailing '/', strip it for a file key
+    key = prefix.rstrip("/")
+    obj = s3.get_object(Bucket=bucket, Key=key)
+    return json.loads(obj["Body"].read().decode("utf-8"))
+
+
+def find_job_dirs(task_path: str):
+    if task_path.startswith("s3://"):
+        bucket, prefix = parse_s3_uri(task_path)
+        subdirs = s3_list_immediate_subprefixes(bucket, prefix)
+
+        # Keep only those with eval_log.json
+        job_prefixes = []
+        for p in subdirs:
+            if s3_key_exists(bucket, p + "eval_log.json"):
+                job_prefixes.append(f"s3://{bucket}/{p}")
+        return sorted(job_prefixes)
+
+    # Local filesystem fallback
+    all_dirs = sorted(glob.glob(f"{task_path}/*"))
+    job_dirs = [
+        d for d in all_dirs
+        if os.path.isdir(d) and os.path.exists(os.path.join(d, "eval_log.json"))
+    ]
+    return job_dirs
