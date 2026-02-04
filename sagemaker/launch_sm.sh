@@ -29,6 +29,7 @@ VLM_SPLIT=${10:-"train"}                              # "train" or "val" or inte
 VLM_OUTPUT_DIR=${11:-"/opt/ml/model/vlm_overlay_outputs"}
 batch_size_train=${12:-16}
 batch_size_val=${13:-16}
+BALANCE_DATA=${14:-true}
 ENTRY_POINT=sagemaker/train_vlm_overlay_sm.py   # new tiny wrapper, see section 4
 CONFIG=cosmos_predict2/configs/base/config.py   # PLACEHOLDER for any  config if needed
 
@@ -62,5 +63,6 @@ AWS_DEFAULT_REGION=${REGION}                            \
     --vlm_model_name_or_path="${VLM_MODEL_PATH}"        \
     --vlm_base_dataset_path="${VLM_BASE_DATASET_PATH}"  \
     --vlm_output_dir="${VLM_OUTPUT_DIR}"                \
-    --vlm_split="${VLM_SPLIT}"
+    --vlm_split="${VLM_SPLIT}"                          \
+    --vlm_balance_data="${BALANCE_DATA}"
 

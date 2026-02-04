@@ -66,19 +66,62 @@ def create_side_by_side(img1: Image.Image, img2: Image.Image) -> Image.Image:
     return combined
 
 
+def _download_s3_video(s3_uri: str) -> str:
+    """Download a video (or PNG directory) from S3 to a local cache directory.
+
+    Returns the local path to the downloaded MP4 file or PNG directory.
+    """
+    os.makedirs(_S3_VIDEO_CACHE_DIR, exist_ok=True)
+    cache_key = hashlib.md5(s3_uri.encode()).hexdigest()
+
+    # Try MP4 first
+    if s3_uri.endswith(".mp4"):
+        local_mp4 = os.path.join(_S3_VIDEO_CACHE_DIR, f"{cache_key}.mp4")
+        if os.path.isfile(local_mp4):
+            return local_mp4
+
+        u = urlparse(s3_uri)
+        bucket = u.netloc
+        key = u.path.lstrip("/")
+
+        if s3_key_exists(bucket, key):
+            s3.download_file(bucket, key, local_mp4)
+            return local_mp4
+
+        # Try PNG directory (strip .mp4 from key)
+        png_prefix = key[:-4] + "/"
+        local_dir = os.path.join(_S3_VIDEO_CACHE_DIR, cache_key)
+        if os.path.isdir(local_dir) and os.listdir(local_dir):
+            return local_dir
+
+        resp = s3.list_objects_v2(Bucket=bucket, Prefix=png_prefix)
+        contents = resp.get("Contents", [])
+        if contents:
+            os.makedirs(local_dir, exist_ok=True)
+            for obj in contents:
+                fname = obj["Key"].split("/")[-1]
+                s3.download_file(bucket, obj["Key"], os.path.join(local_dir, fname))
+            return local_dir
+
+    raise FileNotFoundError(f"Neither MP4 nor PNG directory found on S3 for {s3_uri}")
+
+
 def get_frame_source(video_path: str) -> str:
     """
     Determine the best source for frames: MP4 file or PNG directory.
 
     Args:
-        video_path: Path to the MP4 file (as stored in eval_log.json).
+        video_path: Path to the MP4 file (as stored in eval_log.json),
+                    or an S3 URI (s3://bucket/key).
 
     Returns:
-        The MP4 path if the file exists, otherwise the PNG directory path.
+        A local path to the MP4 file or PNG directory.
 
     Raises:
-        FileNotFoundError: If neither the MP4 nor the PNG directory exists.
+        FileNotFoundError: If the source cannot be found locally or on S3.
     """
+    if video_path.startswith("s3://"):
+        return _download_s3_video(video_path)
     if os.path.isfile(video_path):
         return video_path
     png_dir = video_path[:-4]  # strip .mp4

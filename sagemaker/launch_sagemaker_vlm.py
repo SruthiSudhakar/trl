@@ -138,6 +138,7 @@ def parse_args():
     parser.add_argument("--vlm_split", type=str, default="train")
     parser.add_argument("--batch_size_train", type=int, default=16)
     parser.add_argument("--batch_size_val", type=int, default=16)
+    parser.add_argument("--vlm_balance_data", type=str, default="false")
     return parser.parse_args()
 
 
@@ -253,7 +254,11 @@ def main_after_setup(args):
         "per_device_train_batch_size": args.batch_size_train,
         "per_device_eval_batch_size": args.batch_size_val,
         "report_to": "wandb",
+        "deepspeed": "sagemaker/ds_config_zero2.json",
+        "bf16": True,
+        # "gradient_checkpointing": True,
         "compare_interval": "4,8,12,16",
+        "balance_data": args.vlm_balance_data.lower() in ("true", "1", "yes"),
     }
 
     distribution = {
@@ -266,7 +271,7 @@ def main_after_setup(args):
         "WANDB_API_KEY": os.environ.get("WANDB_API_KEY", "465628e1cdd752aed296abe6439dedcec6fb3292"),
         "WANDB_ENTITY": os.environ.get("WANDB_ENTITY", ""),
         "WANDB__SERVICE_WAIT": "300",
-        "HF_TOKEN": os.environ.get("HF_TOKEN", "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"),
+        "HF_TOKEN": os.environ.get("HF_TOKEN", "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"),
         "HF_HOME": "/tmp",
         "INSTANCE_COUNT": str(args.instance_count),
         "SM_USE_RESERVED_CAPACITY": "1",

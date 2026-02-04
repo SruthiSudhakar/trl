@@ -2,18 +2,18 @@
 set -euo pipefail
 
 dirs=(
-  "PnPCabToCounter"
-  "PnPCounterToCab"
-  "PnPCoffeeServeMug"
-  "PnPCounterToSink"
-  "PnPSinkToCounter"
-  "PnPMicrowaveToCounter"
-  "PnPCounterToMicrowave"
-  "PnPCounterToStove"
+  # "PnPCabToCounter"
+  # "PnPCounterToCab"
+  # "PnPCoffeeServeMug"
+  # "PnPCounterToSink"
+  # "PnPSinkToCounter"
+  # "PnPMicrowaveToCounter"
+  # "PnPCounterToMicrowave"
+  # "PnPCounterToStove"
   "PnPStoveToCounter"
 )
 
-MODEL="outputs/jan29/PnPAll_20260129_222205/checkpoint-24500"
+MODEL="outputs/jan29/PnPAll_20260129_222205/checkpoint-9500"
 BASE_ROOT="/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897"
 
 export MODEL BASE_ROOT
@@ -38,6 +38,5 @@ done | xargs -n 2 -P 8 bash -lc '
     --batch_size 300 \
     --num_samples 1199 \
     --train_val_split_index 5 \
-    --visualize \
-    --prefix "4_8"
+    --visualize
 '

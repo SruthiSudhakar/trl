@@ -105,8 +105,14 @@ def load_trajectories(job_dirs):
     return success_data, failure_data
 
 
-def build_eval_pairs(success_data, failure_data, compare_intervals, job_name, sample_interval=5):
-    """Build frame pair metadata for evaluation (no images, just paths + indices)."""
+def build_eval_pairs(success_data, failure_data, compare_intervals, job_name, sample_interval=5,
+                     success_mean_diffs_at_idx=None):
+    """Build frame pair metadata for evaluation (no images, just paths + indices).
+
+    Args:
+        success_mean_diffs_at_idx: If provided, apply the same failure-frame filter
+            used during training so eval distribution matches train distribution.
+    """
     pairs = []
 
     # Find task token
@@ -150,7 +156,9 @@ def build_eval_pairs(success_data, failure_data, compare_intervals, job_name, sa
                     "demo_id": demo["demo_id"],
                 })
 
-    # Failure vs success pairs
+    # Failure vs success pairs (with same filtering as training)
+    skipped_filter = 0
+    skipped_early = 0
     for demo in failure_data:
         demo_id = demo["demo_id"]
         if demo_id not in success_by_demo:
@@ -159,8 +167,44 @@ def build_eval_pairs(success_data, failure_data, compare_intervals, job_name, sa
         source_fail = get_frame_source(demo["video_path"])
         source_succ = get_frame_source(success_demo["video_path"])
         max_idx = demo["trajectory_index"] - 1
+        beginning_of_failure = None
 
         for idx1 in range(0, max_idx + 1, sample_interval):
+            # Apply the same pixel-diff filter used during training
+            if success_mean_diffs_at_idx is not None and len(success_mean_diffs_at_idx) > 0:
+                try:
+                    fail_img = extract_frame(source_fail, idx1)
+                    succ_img = extract_frame(source_succ, idx1)
+                    arr1 = np.array(fail_img)
+                    arr2 = np.array(succ_img)
+                    mean_diff = np.mean(np.abs(arr1.astype(float) - arr2.astype(float)))
+
+                    should_skip = False
+                    first_demo_key = list(success_mean_diffs_at_idx.keys())[0]
+                    current_demo_id = type(first_demo_key)(demo_id)
+                    if current_demo_id in success_mean_diffs_at_idx:
+                        demo_stats = success_mean_diffs_at_idx[current_demo_id]
+                        if len(demo_stats) > 0:
+                            first_idx_key = list(demo_stats.keys())[0]
+                            idx1_key = type(first_idx_key)(idx1)
+                            if idx1_key in demo_stats:
+                                stats = demo_stats[idx1_key]
+                                if mean_diff <= np.mean(stats) + np.std(stats):
+                                    should_skip = True
+
+                    if should_skip:
+                        skipped_filter += 1
+                        continue
+
+                    if beginning_of_failure is None:
+                        beginning_of_failure = int(idx1)
+                    # Skip first 8 frames after failure starts
+                    if int(idx1) <= beginning_of_failure + 8:
+                        skipped_early += 1
+                        continue
+                except Exception:
+                    continue
+
             correct_answer = 32
             v1, f1, v2, f2 = source_fail, idx1, source_succ, idx1
             if random.random() < 0.5:
@@ -176,6 +220,9 @@ def build_eval_pairs(success_data, failure_data, compare_intervals, job_name, sa
                 "demo_type": "failure_vs_success",
                 "demo_id": demo_id,
             })
+
+    if success_mean_diffs_at_idx is not None:
+        print(f"  Failure filter: skipped {skipped_filter} (too similar) + {skipped_early} (early divergence)")
 
     return pairs
 
@@ -469,7 +516,7 @@ def main():
     compare_intervals = [int(x.strip()) for x in args.compare_interval.split(",")]
 
     output_dir = args.output_dir or os.path.join(
-        args.model_name_or_path, f"eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{args.prefix}"
+        args.model_name_or_path, f"eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{'_'.join(map(str, compare_intervals))}"
     )
     os.makedirs(output_dir, exist_ok=True)
 
@@ -491,8 +538,21 @@ def main():
     success_data, failure_data = load_trajectories(job_dirs)
     print(f"Loaded {len(success_data)} success + {len(failure_data)} failure trajectories")
 
+    # Load cached failure filter stats (same filter used during training)
+    success_mean_diffs_at_idx = None
+    stats_cache_file = Path(args.base_dataset_path) / "failure_filter_stats.json"
+    if stats_cache_file.exists():
+        print(f"Loading failure filter stats from {stats_cache_file}")
+        with open(stats_cache_file, "r") as f:
+            cached = json.load(f)
+            success_mean_diffs_at_idx = cached["success_mean_diffs_at_idx"]
+        print("  Will apply same failure-frame filter as training to match train/eval distribution")
+    else:
+        raise Exception(f"Warning: {stats_cache_file} not found — evaluating WITHOUT failure-frame filter (train/eval mismatch)")
+
     job_name = Path(job_dirs[0]).name if job_dirs else ""
-    pairs = build_eval_pairs(success_data, failure_data, compare_intervals, job_name, args.sample_interval)
+    pairs = build_eval_pairs(success_data, failure_data, compare_intervals, job_name, args.sample_interval,
+                             success_mean_diffs_at_idx=success_mean_diffs_at_idx)
     print(f"Built {len(pairs)} evaluation pairs")
 
     if args.num_samples and args.num_samples < len(pairs):

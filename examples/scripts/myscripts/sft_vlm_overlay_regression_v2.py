@@ -44,7 +44,7 @@ CUDA_VISIBLE_DEVICES=0 accelerate launch --num_processes=1 --gpu_ids=0 \
     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/myscripts/sft_vlm_overlay_regression_v2.py \
     --model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
-    --base_dataset_path "/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToStove,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPStoveToCounter,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToMicrowave,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPMicrowaveToCounter,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToSink,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPSinkToCounter,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCoffeeServeMug,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCloseDrawer,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCabToCounter,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToCab" \
+    --base_dataset_path "/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_mg_place_PnPStoveToCounter" \
     --output_dir "outputs/TEST_$(date +%Y%m%d_%H%M%S)" \
     --eval_strategy steps \
     --logging_steps 500 \
@@ -57,7 +57,9 @@ CUDA_VISIBLE_DEVICES=0 accelerate launch --num_processes=1 --gpu_ids=0 \
     --per_device_eval_batch_size 8 \
     --report_to wandb \
     --split train \
-    --compare_interval 4,8,12,16 
+    --compare_interval 4,8,12,16 \
+    --just_visualize
+    
 """
 
 import ast
@@ -73,7 +75,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Union
 import pdb
-
+import sys
 import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 import numpy as np
@@ -95,7 +97,7 @@ from trl import (
 )
 from trl.trainer.sft_trainer import DataCollatorForVisionLanguageModeling
 
-from video_frame_utils import create_side_by_side, extract_frame, get_frame_source, find_job_dirs, read_s3_json
+from video_frame_utils import create_side_by_side, extract_frame, get_frame_source, find_job_dirs, read_s3_json, s3, parse_s3_uri
 
 # Set random seed for reproducibility
 random.seed(42)
@@ -206,7 +208,15 @@ def load_trajectories(job_dirs):
                 continue
             trajectory = ast.literal_eval(value)
             video_key = key.replace("train/sim_reward_trajectory_", "train/sim_video_")
-            video_path = "/workspace/guided_diffusion_policy/" + all_metadata[video_key]
+            video_rel = all_metadata[video_key]
+            if job_name + "/" in video_rel:
+                rel_after_job = video_rel.split(job_name + "/", 1)[1]
+                video_path = job_dir.rstrip("/") + "/" + rel_after_job
+            elif "trainmedia/" in video_rel:
+                trainmedia_part = "trainmedia/" + video_rel.split("trainmedia/", 1)[1]
+                video_path = job_dir.rstrip("/") + "/" + trainmedia_part
+            else:
+                video_path = "/workspace/guided_diffusion_policy/" + video_rel
             demo_id = int(key.split("train/sim_reward_trajectory_")[-1].split("_")[0])
 
             if 1 in trajectory:
@@ -433,7 +443,7 @@ def build_frame_pairs(
                     if beginning_of_failure is None:
                         beginning_of_failure = idx1
                     # Skip first 8 frames after failure starts
-                    if idx1 <= beginning_of_failure + 8:
+                    if idx1 <= beginning_of_failure + 4:
                         continue
                 except Exception as e:
                     logger.warning(f"Failed to compare frames at idx {idx1}: {e}")
@@ -678,6 +688,132 @@ def visualize_dataset(combined_data, output_dir, split_name="train", num_example
     return viz_dir
 
 
+def visualize_dataset_diagnostic(combined_data, output_dir, split_name="train", num_examples_per_demo=20):
+    """
+    Show example datapoints from each demo with metadata labels.
+
+    Saves to {output_dir}/dataset_viz_diagnostic/:
+      - One PNG per demo showing sample frames with success/failure labels and frame indices
+
+    Args:
+        combined_data: List of metadata dicts (with video_path_1/2, frame_idx_1/2, etc.)
+        output_dir: Directory to save outputs.
+        split_name: Label for the split (e.g., "train", "val").
+        num_examples_per_demo: Number of example images to show per demo.
+    """
+    if len(combined_data) == 0:
+        logger.warning("No data to visualize")
+        return
+
+    viz_dir = Path(output_dir) / "dataset_viz_diagnostic"
+    viz_dir.mkdir(parents=True, exist_ok=True)
+
+    # Helper to extract demo name from video path
+    def get_demo_name_from_path(video_path):
+        """Extract demo name (e.g., '10_5_abc123') from video path."""
+        return video_path[:-4].split("/")[-1]  # Remove .mp4 and get filename
+
+    # Group data by demo_id_exact (unique video/trajectory identifier)
+    demos_by_id = defaultdict(list)
+    for i, item in enumerate(combined_data):
+        demo_key = item.get("demo_id_exact", item.get("demo_id", "unknown"))
+        demos_by_id[demo_key].append((i, item))
+
+    logger.info(f"Found {len(demos_by_id)} unique demos to visualize")
+
+    for demo_key, demo_items in tqdm(demos_by_id.items(), desc="Generating per-demo visualizations"):
+        # Sort by frame index to show progression through the video
+        demo_items_sorted = sorted(demo_items, key=lambda x: x[1]["frame_idx_1"])
+
+        # Sample evenly spaced examples if we have more than num_examples_per_demo
+        if len(demo_items_sorted) > num_examples_per_demo:
+            indices = np.linspace(0, len(demo_items_sorted) - 1, num_examples_per_demo, dtype=int)
+            demo_items_sorted = [demo_items_sorted[i] for i in indices]
+
+        n = len(demo_items_sorted)
+        if n == 0:
+            continue
+
+        n_cols = min(3, n)
+        n_rows = (n + n_cols - 1) // n_cols
+
+        fig = plt.figure(figsize=(7 * n_cols, 6 * n_rows))
+
+        # Get metadata from first item for the title
+        first_item = demo_items_sorted[0][1]
+        demo_success = first_item.get("demo_success", "unknown")
+        task_token = first_item.get("task_token", "unknown")
+        success_label = "SUCCESS" if demo_success == "success" else "FAILURE"
+        title_color = "#2ecc71" if demo_success == "success" else "#e74c3c"
+
+        # For failure demos, find the success video being compared against
+        compared_against = ""
+        if demo_success == "failure":
+            # The demo_key is from the failure video. Find which video_path is the success one.
+            video_path_1 = first_item.get("video_path_1", "")
+            video_path_2 = first_item.get("video_path_2", "")
+            demo_name_1 = get_demo_name_from_path(video_path_1)
+            demo_name_2 = get_demo_name_from_path(video_path_2)
+
+            # The one that doesn't match demo_key is the success video
+            if demo_name_1 == demo_key:
+                success_demo_name = demo_name_2
+            else:
+                success_demo_name = demo_name_1
+            compared_against = f"\nCompared against SUCCESS: {success_demo_name}"
+
+        fig.suptitle(
+            f"Demo: {demo_key} | {success_label} | Task: {task_token}{compared_against}",
+            fontsize=14, fontweight="bold", color=title_color, y=1.02
+        )
+
+        for plot_idx, (data_idx, item) in enumerate(demo_items_sorted):
+            ax = fig.add_subplot(n_rows, n_cols, plot_idx + 1)
+
+            try:
+                frame1 = extract_frame(item["video_path_1"], item["frame_idx_1"])
+                frame2 = extract_frame(item["video_path_2"], item["frame_idx_2"])
+                overlay = create_side_by_side(frame1, frame2)
+                ax.imshow(overlay)
+            except Exception as e:
+                ax.text(0.5, 0.5, f"Failed: {e}", ha="center", va="center", transform=ax.transAxes)
+
+            ax.axis("off")
+
+            # Label with frame indices and which side is which
+            frame_idx_1 = item["frame_idx_1"]
+            frame_idx_2 = item["frame_idx_2"]
+            correct_answer = item.get("correct_answer", "?")
+            answer_color = "#2ecc71" if correct_answer > 0 else "#e74c3c"
+
+            # For failure demos, show which side is failure vs success
+            if demo_success == "failure":
+                video_path_1 = item.get("video_path_1", "")
+                demo_name_1 = get_demo_name_from_path(video_path_1)
+                if demo_name_1 == demo_key:
+                    left_label, right_label = "FAIL", "SUCC"
+                else:
+                    left_label, right_label = "SUCC", "FAIL"
+                info_text = (
+                    f"Frame {frame_idx_1} ({left_label}) vs {frame_idx_2} ({right_label})\n"
+                    f"Answer: {correct_answer}"
+                )
+            else:
+                info_text = (
+                    f"Frame {frame_idx_1} vs {frame_idx_2}\n"
+                    f"Answer: {correct_answer}"
+                )
+            ax.set_title(info_text, fontsize=10, color=answer_color, fontweight="bold")
+
+        plt.tight_layout()
+        safe_demo_key = str(demo_key).replace("/", "_").replace("\\", "_")
+        plt.savefig(viz_dir / f"demo_{safe_demo_key}.png", dpi=150, bbox_inches="tight")
+        plt.close()
+
+    logger.info(f"Saved per-demo visualizations to {viz_dir}")
+    return viz_dir
+
+
 # ============================================================================
 # Example IO Callback
 # ============================================================================
@@ -801,6 +937,7 @@ if __name__ == "__main__":
         max_exact_per_demo: int = 50
         debug_samples: int = -1
         just_visualize: bool = False
+        balance_data: bool = False
 
     parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig, OverlayArguments))
     script_args, training_args, model_args, overlay_args = parser.parse_args_and_config()
@@ -823,6 +960,7 @@ if __name__ == "__main__":
     logger.info(f"Sample interval: {overlay_args.train_sample_interval}")
     logger.info(f"Base dataset path: {overlay_args.base_dataset_path}")
     logger.info(f"Just visualize: {overlay_args.just_visualize}")
+    logger.info(f"Balance data: {overlay_args.balance_data}")
 
     # ============================
     # Distributed setup
@@ -892,21 +1030,41 @@ if __name__ == "__main__":
         # ============================
         # Compute failure filter stats for this task
         # ============================
-        stats_cache_file = Path(task_path) / "failure_filter_stats.json"
-        if stats_cache_file.exists():
-            logger.info(f"Loading cached failure filter stats from {stats_cache_file}")
-            with open(stats_cache_file, "r") as f:
-                cached = json.load(f)
+        success_mean_diffs_at_idx = None
+        if task_path.startswith("s3://"):
+            stats_s3_uri = task_path.rstrip("/") + "/failure_filter_stats.json"
+            try:
+                cached = read_s3_json(stats_s3_uri)
                 success_mean_diffs_at_idx = cached["success_mean_diffs_at_idx"]
+                logger.info(f"Loaded cached failure filter stats from {stats_s3_uri}")
+            except Exception:
+                logger.info(f"No cached stats found at {stats_s3_uri}")
         else:
+            stats_cache_file = Path(task_path) / "failure_filter_stats.json"
+            if stats_cache_file.exists():
+                logger.info(f"Loading cached failure filter stats from {stats_cache_file}")
+                with open(stats_cache_file, "r") as f:
+                    cached = json.load(f)
+                    success_mean_diffs_at_idx = cached["success_mean_diffs_at_idx"]
+
+        if success_mean_diffs_at_idx is None:
             logger.info("Computing failure filter stats...")
             success_mean_diffs_at_idx = compute_failure_filter_stats(
                 success_by_demo, failure_by_demo, local_rank, world_size
             )
             if local_rank == 0:
-                with open(stats_cache_file, "w") as f:
-                    json.dump({"success_mean_diffs_at_idx": success_mean_diffs_at_idx}, f)
-                logger.info(f"Saved failure filter stats to {stats_cache_file}")
+                if task_path.startswith("s3://"):
+                    stats_s3_uri = task_path.rstrip("/") + "/failure_filter_stats.json"
+                    body = json.dumps({"success_mean_diffs_at_idx": success_mean_diffs_at_idx})
+                    bucket, prefix = parse_s3_uri(stats_s3_uri)
+                    key = prefix.rstrip("/")
+                    s3.put_object(Bucket=bucket, Key=key, Body=body.encode())
+                    logger.info(f"Saved failure filter stats to {stats_s3_uri}")
+                else:
+                    stats_cache_file = Path(task_path) / "failure_filter_stats.json"
+                    with open(stats_cache_file, "w") as f:
+                        json.dump({"success_mean_diffs_at_idx": success_mean_diffs_at_idx}, f)
+                    logger.info(f"Saved failure filter stats to {stats_cache_file}")
 
         # ============================
         # Build frame pair metadata for this task
@@ -926,6 +1084,27 @@ if __name__ == "__main__":
         combined_data.extend(task_combined_data)
 
     logger.info(f"Total frame pairs across all tasks: {len(combined_data)}")
+
+    if overlay_args.balance_data:
+        # ============================
+        # Balance success vs failure_vs_success pair types
+        # ============================
+        if len(combined_data) > 0:
+            success_pairs = [item for item in combined_data if item["demo_success"] == "success"]
+            failure_pairs = [item for item in combined_data if item["demo_success"] == "failure"]
+            logger.info(f"Before pair-type balancing: {len(success_pairs)} success pairs, {len(failure_pairs)} failure_vs_success pairs")
+
+            if len(success_pairs) > 0 and len(failure_pairs) > 0:
+                if len(success_pairs) > len(failure_pairs):
+                    rng = random.Random(42)
+                    success_pairs = rng.sample(success_pairs, len(failure_pairs))
+                    logger.info(f"Downsampled success pairs: {len(success_pairs)} to match failure_vs_success count")
+                elif len(failure_pairs) > len(success_pairs):
+                    rng = random.Random(42)
+                    failure_pairs = rng.sample(failure_pairs, len(success_pairs))
+                    logger.info(f"Downsampled failure_vs_success pairs: {len(failure_pairs)} to match success count")
+                combined_data = success_pairs + failure_pairs
+                logger.info(f"After pair-type balancing: {len(combined_data)} total pairs")
 
     # ============================
     # Balance samples across tasks
@@ -964,6 +1143,7 @@ if __name__ == "__main__":
     # ============================
     if local_rank == 0 and len(combined_data) > 0:
         try:
+            visualize_dataset_diagnostic(combined_data, training_args.output_dir, split_name=split, num_examples_per_demo=6)
             visualize_dataset(combined_data, training_args.output_dir, split_name=split, num_examples=8)
         except Exception as e:
             logger.warning(f"Failed to generate visualizations: {e}")
