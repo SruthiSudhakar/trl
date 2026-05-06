@@ -7,25 +7,15 @@ on-the-fly video frame decoding (matching the v2 training pipeline).
 Usage:
 export GOOGLE_API_KEY="AIzaSyDz5juA63feTZpUReaD7KEIzNiNQVWekL0"
 # Single dataset
-CUDA_VISIBLE_DEVICES=0 python3 examples/scripts/myscripts/evaluate_vlm_overlay_regression_v2.py \
-    --model_name_or_path outputs/jan29/PnPAll_20260129_222205/checkpoint-8000 \
-    --base_dataset_path /workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/feb7_na_na_16_mg_place_PnPStoveToCounter_mg_fixed_224 \
+CUDA_VISIBLE_DEVICES=7 python3 examples/scripts/myscripts/evaluate_GVL.py \
+    --base_dataset_path "/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToStove" \
     --split val \
-    --compare_interval 4,8,12,16 \
+    --compare_interval 75 \
     --batch_size 10 \
-    --num_samples 10 \
+    --num_samples 100 \
     --train_val_split_index 5 \
-    --visualize
-CUDA_VISIBLE_DEVICES=0 python3 /workspace/hf_trl/trl/examples/scripts/myscripts/evaluate_vlm_overlay_regression_v2.py \
-    --model_name_or_path /workspace/hf_trl/trl/examples/scripts/myscripts/evaluate_ROVER.py     --model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
-    --base_dataset_path /workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/feb7_na_na_16_mg_place_PnPSinkToCounter_mg_fixed_224 \
-    --split val \
-    --compare_interval 8,16 \
-    --batch_size 100 \
-    --num_samples 1000 \
-    --train_val_split_index 5 \
-    --visualize
-
+    --visualize \
+    --exclude_failures
 """
 
 import argparse
@@ -44,20 +34,105 @@ import torch
 from PIL import Image
 from tqdm import tqdm
 from transformers import AutoModelForImageTextToText, AutoProcessor
+import pdb
 
 from video_frame_utils import create_side_by_side, extract_frame, find_job_dirs
 
 # Import shared code from training script
 from sft_vlm_overlay_regression_v2 import (
-    SYSTEM_PROMPT,
-    USER_PROMPT_TEMPLATE,
-    TASK_TOKENS,
     load_trajectories,
     match_failures_to_successes,
     balance_by_demo_id,
     build_frame_pairs,
-    compute_failure_filter_stats
 )
+TASK_TOKEN_TO_DESC = {
+    "[COUNTER_TO_CAB]": "Pick up the object from the counter and place it in the cabinet",
+    "[CAB_TO_COUNTER]": "Pick up the object from the cabinet and place it on the counter",
+    "[COUNTER_TO_MICROWAVE]": "Pick up the object from the counter and place it in the microwave",
+    "[MICROWAVE_TO_COUNTER]": "Pick up the object from the microwave and place it on the counter",
+    "[STOVE_TO_COUNTER]": "Pick up the object from the stove and place it on the counter",
+    "[COUNTER_TO_STOVE]": "Pick up the object from the counter and place it on the stove",
+    "[COUNTER_TO_SINK]": "Pick up the object from the counter and place it in the sink",
+    "[SINK_TO_COUNTER]": "Pick up the object from the sink and place it on the counter",
+    "[COFFEE_SERVE_MUG]": "Pick up the mug from the coffee machine and place it on the counter",
+    "[CLOSE_DRAWER]": "Close the drawer",
+}
+TASK_TOKEN_TO_CONTEXT = {
+    "[COUNTER_TO_CAB]": {
+        "initial_scene": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCounterToCab.mp4', 0),
+        "frame1": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCounterToCab.mp4', 95),
+        "frame2": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCounterToCab.mp4', 45),
+        "answer": "{\"Frame 1\": {\"Frame Description\": \"The robot has successfuly placed the object in the cabinet, \", \"Task Completion Percentage\": 100}, \"Frame 2\": {\"Frame Description\": \"The robot picked up the object from the counter and is moving to the cabinet, \", \"Task Completion Percentage\": 60}}"
+    },
+    "[CAB_TO_COUNTER]": {
+        "initial_scene": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCabToCounter.mp4', 0),
+        "frame1": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCabToCounter.mp4', 130),
+        "frame2": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCabToCounter.mp4', 60),
+        "answer": "{\"Frame 1\": {\"Frame Description\": \"The robot has successfuly placed the object on the counter\", \"Task Completion Percentage\": 100}, \"Frame 2\": {\"Frame Description\": \"The robot has picked up the object from inside the cabinet and is moving to the counter\", \"Task Completion Percentage\": 60}}"
+    },
+    "[COUNTER_TO_MICROWAVE]": {
+        "initial_scene": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCounterToMicrowave.mp4', 0),
+        "frame1": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCounterToMicrowave.mp4', 230),
+        "frame2": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCounterToMicrowave.mp4', 110),
+        "answer": "{\"Frame 1\": {\"Frame Description\": \"The robot has successfuly placed the object in the microwave\", \"Task Completion Percentage\": 100}, \"Frame 2\": {\"Frame Description\": \"The robot has picked up the object from the plate on the counter\", \"Task Completion Percentage\": 60}}"
+
+    },
+    "[MICROWAVE_TO_COUNTER]": {
+        "initial_scene": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPMicrowaveToCounter.mp4', 0),
+        "frame2": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPMicrowaveToCounter.mp4', 120),
+        "frame1": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPMicrowaveToCounter.mp4', 50),
+        "answer": "{\"Frame 1\": {\"Frame Description\": \"The robot has successfuly placed the object on the counter\", \"Task Completion Percentage\": 100}, \"Frame 2\": {\"Frame Description\": \"The robot has picked up the object from microwave\", \"Task Completion Percentage\": 60}}"
+
+    },
+    "[STOVE_TO_COUNTER]": {
+        "initial_scene": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPStoveToCounter.mp4', 0),
+        "frame1": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPStoveToCounter.mp4', 108),
+        "frame2": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPStoveToCounter.mp4', 60),
+        "answer": "{\"Frame 1\": {\"Frame Description\": \"The robot successfuly placed the object on the counter\", \"Task Completion Percentage\": 100}, \"Frame 2\": {\"Frame Description\": \"The robot has picked up the object from the stove\", \"Task Completion Percentage\": 60}}"
+    },
+    "[COUNTER_TO_STOVE]": {
+        "initial_scene": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCounterToStove.mp4', 0),
+        "frame1": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCounterToStove.mp4', 180),
+        "frame2": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCounterToStove.mp4', 90),
+        "answer": "{\"Frame 1\": {\"Frame Description\": \"The robot has successfuly placed the object on the stove\", \"Task Completion Percentage\": 100}, \"Frame 2\": {\"Frame Description\": \"The robot has picked up the object from the counter and is moving to the stove\", \"Task Completion Percentage\": 60}}"
+    },
+    "[COUNTER_TO_SINK]": {
+        "initial_scene": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCounterToSink.mp4', 0),
+        "frame1": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCounterToSink.mp4', 180),
+        "frame2": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCounterToSink.mp4', 95),
+        "answer": "{\"Frame 1\": {\"Frame Description\": \"The robot has successfuly placed the object in the sink\", \"Task Completion Percentage\": 100}, \"Frame 2\": {\"Frame Description\": \"The robot has picked up the object from the counter and is moving to the sink\", \"Task Completion Percentage\": 60}}"
+    },
+    "[SINK_TO_COUNTER]": {
+        "initial_scene": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPSinkToCounter.mp4', 0),
+        "frame1": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPSinkToCounter.mp4', 120),
+        "frame2": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPSinkToCounter.mp4', 50),
+        "answer": "{\"Frame 1\": {\"Frame Description\": \"The robot has successfuly placed the object on the counter\", \"Task Completion Percentage\": 100}, \"Frame 2\": {\"Frame Description\": \"The robot has picked up the object from the sink and is moving to the counter\", \"Task Completion Percentage\": 60}}"
+    },
+    "[COFFEE_SERVE_MUG]": {
+        "initial_scene": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCoffeeServeMug.mp4', 0),
+        "frame1": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCoffeeServeMug.mp4', 169),
+        "frame2": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCoffeeServeMug.mp4', 100),
+        "answer": "{\"Frame 1\": {\"Frame Description\": \"The robot has successfuly placed the mug on the counter\", \"Task Completion Percentage\": 100}, \"Frame 2\": {\"Frame Description\": \"The robot successfuly picked up the mug from the coffee machine\", \"Task Completion Percentage\": 60}}"
+    },
+    "[CLOSE_DRAWER]": {
+        "initial_scene": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCloseDrawer.mp4', 0),
+        "frame1": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCloseDrawer.mp4', 171),
+        "frame2": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCloseDrawer.mp4', 60),
+        "answer": "{\"Frame 1\": {\"Frame Description\": \"The robot has successfuly closed the drawer\", \"Task Completion Percentage\": 100}, \"Frame 2\": {\"Frame Description\": \"The robot is moving to the drawer\", \"Task Completion Percentage\": 60}}"
+    },
+}
+
+
+IN_CONTEXT_EXAMPLE = """You are an expert roboticist tasked to predict task completion percentage for frames of a robot for the task of: {task_token}. The task completion percentage is between 0 and 100, where 100 corresponds to full task completion. We provide an example of the robot performing the task at two different stages and the two frames' corresponding task completion percentage."""
+INITIAL_SCENE = """Note that these frames are in random order, so please pay attention to the individual frames when reasoning about task completion percentage. Now here is the initial robot scene. In the initial robot scene, the task completion percentage is 0."""
+USER_PROMPT_TEMPLATE = """Now, for the task of {task_token}, output the task completion percentage for the following 2 frames that are presented in random order. For each frame, format your response as a json as follows: {\"Frame 1\": {\"Frame Description\": frame_description_1, \"Task Completion Percentage\": task_completion_percentage_1}, \"Frame 2\": {\"Frame Description\": frame_description_2, \"Task Completion Percentage\": task_completion_percentage_2}}. Output MUST be exactly one JSON object like:
+- No Markdown, no ``` fences, no extra text.
+- Use double quotes only.
+- Use key "Task Completion Percentage" (singular) exactly.
+- Percent must be an integer 0-100.
+- If uncertain, still output an integer guess.
+"""
+
 
 
 # ============================================================================
@@ -65,10 +140,14 @@ from sft_vlm_overlay_regression_v2 import (
 # ============================================================================
 
 def extract_number(text: str) -> Optional[float]:
-    m = re.search(r"[-+]?\d+(?:\.\d+)?", text)
-    if m is None:
+    try:
+        text = json.loads(text)
+        if int(text['Frame 1']['Task Completion Percentage']) > int(text['Frame 2']['Task Completion Percentage']):
+            return -32
+        else:
+            return 32
+    except:
         return None
-    return float(m.group(0))
 
 
 def run_inference(model, processor, pairs, batch_size, device, max_new_tokens=64):
@@ -83,27 +162,37 @@ def run_inference(model, processor, pairs, batch_size, device, max_new_tokens=64
 
         for item in batch:
             try:
+                initial_scene = extract_frame(item["video_path_1"], 0)
                 frame1 = extract_frame(item["video_path_1"], item["frame_idx_1"])
                 frame2 = extract_frame(item["video_path_2"], item["frame_idx_2"])
                 overlay = create_side_by_side(frame1, frame2)
             except Exception as e:
                 print(f"Warning: failed to load frames: {e}")
-                overlay = Image.new("RGB", (256, 128), (128, 128, 128))
-
             # Build user prompt from task_token
-            user_prompt = USER_PROMPT_TEMPLATE.format(task_token=item["task_token"])
-
             conversation = [
-                {"role": "system", "content": [{"type": "text", "text": SYSTEM_PROMPT}]},
+                {"role": "system", "content": [{"type": "text", "text": ""}]},
                 {
                     "role": "user",
                     "content": [
-                        {"type": "image", "image": overlay},
-                        {"type": "text", "text": user_prompt},
+                        {"type": "text", "text": IN_CONTEXT_EXAMPLE.replace("{task_token}", TASK_TOKEN_TO_DESC[item["task_token"]])},
+                        {"type": "text", "text": "Initial robot scene"},
+                        {"type": "image", "image": TASK_TOKEN_TO_CONTEXT[item["task_token"]]["initial_scene"]},
+                        {"type": "text", "text": "Frame 1:"},
+                        {"type": "image", "image": TASK_TOKEN_TO_CONTEXT[item["task_token"]]["frame1"]},
+                        {"type": "text", "text": "Frame 2:"},
+                        {"type": "image", "image": TASK_TOKEN_TO_CONTEXT[item["task_token"]]["frame2"]},
+                        {"type": "text", "text": TASK_TOKEN_TO_CONTEXT[item["task_token"]]["answer"]},
+                        {"type": "text", "text": INITIAL_SCENE},
+                        {"type": "text", "text": "Initial robot scene"},
+                        {"type": "image", "image": initial_scene},
+                        {"type": "text", "text": USER_PROMPT_TEMPLATE.replace("{task_token}", TASK_TOKEN_TO_DESC[item["task_token"]])},
+                        {"type": "text", "text": "Frame 1:"},
+                        {"type": "image", "image": frame1},
+                        {"type": "text", "text": "Frame 2:"},
+                        {"type": "image", "image": frame2},
                     ],
                 },
             ]
-
             try:
                 import qwen_vl_utils
                 image_input, _ = qwen_vl_utils.process_vision_info(conversation)
@@ -170,17 +259,6 @@ def run_inference(model, processor, pairs, batch_size, device, max_new_tokens=64
 # Metrics & Visualization
 # ============================================================================
 
-def _get_interval_label(r):
-    """Classify a result as 'intra-N' (same video, N frames apart) or 'sf' (success-failure)."""
-    f1 = r.get("frame_idx_1")
-    f2 = r.get("frame_idx_2")
-    v1 = r.get("video_path_1")
-    v2 = r.get("video_path_2")
-    if v1 == v2 and isinstance(f1, int) and isinstance(f2, int):
-        return f"intra-{abs(f2 - f1)}"
-    return "sf"
-
-
 def compute_metrics(results, tolerance=3):
     valid = [r for r in results if r["prediction"] is not None]
     if not valid:
@@ -211,25 +289,6 @@ def compute_metrics(results, tolerance=3):
         metrics[f"{dtype}_count"] = len(subset)
         metrics[f"{dtype}_mae"] = float(np.mean(sub_abs))
         metrics[f"{dtype}_sign_accuracy"] = float(np.mean(sub_sign))
-
-    # Per interval breakdown
-    interval_groups = defaultdict(list)
-    for r in valid:
-        interval_groups[_get_interval_label(r)].append(r)
-
-    interval_metrics = {}
-    for label, group in sorted(interval_groups.items()):
-        g_sign = [r["sign_correct"] for r in group]
-        interval_metrics[label] = {
-            "count": len(group),
-            "sign_accuracy": float(np.mean(g_sign)),
-            "mae": float(np.mean([r["abs_error"] for r in group])),
-        }
-        metrics[f"interval_{label}_count"] = len(group)
-        metrics[f"interval_{label}_sign_accuracy"] = float(np.mean(g_sign))
-        metrics[f"interval_{label}_mae"] = float(np.mean([r["abs_error"] for r in group]))
-
-    metrics["interval_breakdown"] = interval_metrics
 
     return metrics
 
@@ -285,44 +344,7 @@ def visualize_results(results, output_dir, num_examples=8):
     plt.savefig(viz_dir / "error_distribution.png", dpi=150, bbox_inches="tight")
     plt.close()
 
-    # --- Plot 2: Sign accuracy breakdown by interval ---
-    interval_groups = defaultdict(list)
-    for r in valid:
-        interval_groups[_get_interval_label(r)].append(r)
-
-    if interval_groups:
-        def _sort_key(label):
-            if label == "sf":
-                return (0, 0)
-            return (1, int(label.split("-")[1]))
-
-        sorted_labels = sorted(interval_groups.keys(), key=_sort_key)
-        accuracies = [np.mean([r["sign_correct"] for r in interval_groups[l]]) * 100 for l in sorted_labels]
-        counts = [len(interval_groups[l]) for l in sorted_labels]
-
-        fig, ax = plt.subplots(figsize=(max(6, len(sorted_labels) * 1.5), 5))
-        bars = ax.bar(range(len(sorted_labels)), accuracies,
-                      color=["#e74c3c" if l == "sf" else "#3498db" for l in sorted_labels],
-                      edgecolor="black", alpha=0.85)
-
-        for i, (bar, acc, cnt) in enumerate(zip(bars, accuracies, counts)):
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1,
-                    f"{acc:.1f}%\n(n={cnt})", ha="center", va="bottom", fontsize=10, fontweight="bold")
-
-        ax.set_xticks(range(len(sorted_labels)))
-        ax.set_xticklabels(sorted_labels, fontsize=11)
-        ax.set_ylabel("Sign Accuracy (%)", fontsize=12)
-        ax.set_xlabel("Pair Type", fontsize=12)
-        ax.set_title("Sign Accuracy by Compare Interval", fontsize=14, fontweight="bold")
-        ax.set_ylim(0, min(max(accuracies) + 15, 105))
-        ax.axhline(y=50, color="gray", linestyle="--", alpha=0.5, label="Chance (50%)")
-        ax.legend()
-
-        plt.tight_layout()
-        plt.savefig(viz_dir / "accuracy_by_interval.png", dpi=150, bbox_inches="tight")
-        plt.close()
-
-    # --- Plot 3: Sample overlays with predictions ---
+    # --- Plot 2: Sample overlays with predictions ---
     worst = sorted(valid, key=lambda x: x["abs_error"], reverse=True)[:num_examples]
     best = sorted(valid, key=lambda x: x["abs_error"])[:num_examples]
 
@@ -376,7 +398,8 @@ def visualize_results(results, output_dir, num_examples=8):
 def parse_args():
     p = argparse.ArgumentParser(description="Test a trained VLM overlay regression v2 model on new dataset(s)")
 
-    p.add_argument("--model_name_or_path", type=str, required=True,
+    p.add_argument("--model_name_or_path", type=str,
+                   default="/workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct",
                    help="Path to trained checkpoint (full model or PEFT adapter)")
     p.add_argument("--base_model_name_or_path", type=str,
                    default="/workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct",
@@ -407,7 +430,11 @@ def parse_args():
                    help="Output directory (defaults to <model_path>/<prefix>eval_<timestamp>_<intervals>)")
     p.add_argument("--prefix", type=str, default="",
                    help="Prefix for output directory")
-
+    p.add_argument(
+        "--exclude_failures",
+        action="store_true",
+        help="Exclude failure trajectories"
+    )
     return p.parse_args()
 
 
@@ -466,7 +493,7 @@ def main():
     # Root output dir (one folder for the whole run)
     root_output_dir = args.output_dir or os.path.join(
         args.model_name_or_path,
-        f"{args.prefix}eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{'_'.join(map(str, compare_intervals))}"
+        f"{args.prefix}GVLeval_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{'_'.join(map(str, compare_intervals))}"
     )
     os.makedirs(root_output_dir, exist_ok=True)
 
@@ -540,14 +567,17 @@ def main():
 
         success_data, unfiltered_failure_data = load_trajectories(job_dirs)
         print(f"Loaded {len(success_data)} success + {len(unfiltered_failure_data)} failure trajectories")
-
-        failure_data = match_failures_to_successes(success_data, unfiltered_failure_data)
-        print(f"Matched {len(failure_data)} failures to success trajectories")
+        if not args.exclude_failures:
+            failure_data = match_failures_to_successes(success_data, unfiltered_failure_data)
+            print(f"Matched {len(failure_data)} failures to success trajectories")
+        else:
+            failure_data = []
+            print("Skipping failure data (--exclude_failures is True)")
 
         # ============================
         # Balanced sampling for this task
         # ============================
-        if success_data and failure_data:
+        if not args.exclude_failures and success_data and failure_data:
             success_data, failure_data, success_by_demo, failure_by_demo = balance_by_demo_id(
                 success_data, failure_data, 50
             )
@@ -583,7 +613,7 @@ def main():
             failure_data = capped_failure
 
         # Load cached failure filter stats (same filter used during training)
-        if failure_data:
+        if not args.exclude_failures and failure_data:
             success_mean_diffs_at_idx = None
             stats_cache_file = Path(base_dataset_path) / "failure_filter_stats.json"
             if stats_cache_file.exists():
@@ -592,16 +622,6 @@ def main():
                     cached = json.load(f)
                     success_mean_diffs_at_idx = cached["success_mean_diffs_at_idx"]
                 print("  Will apply same failure-frame filter as training to match train/eval distribution")
-            else:
-                print("No cached stats found, computing failure filter stats...")
-                success_mean_diffs_at_idx = compute_failure_filter_stats(
-                    success_by_demo, failure_by_demo, 0, 1
-                )
-                stats_cache_file = Path(base_dataset_path) / "failure_filter_stats.json"
-                with open(stats_cache_file, "w") as f:
-                    json.dump({"success_mean_diffs_at_idx": success_mean_diffs_at_idx}, f)
-                print(f"Saved failure filter stats to {stats_cache_file}")
-
         else:
             success_mean_diffs_at_idx = {}
             print("Skipping failure filter stats (no failure data)")
@@ -621,8 +641,7 @@ def main():
         print(f"Built {len(pairs)} evaluation pairs")
 
         if args.num_samples and args.num_samples < len(pairs):
-            subsample_rng = random.Random(args.seed)
-            pairs = subsample_rng.sample(pairs, args.num_samples)
+            pairs = random.sample(pairs, args.num_samples)
             print(f"Subsampled to {len(pairs)} pairs")
 
         # ---- Run inference ----
@@ -649,21 +668,12 @@ def main():
 
         # Per demo_type breakdown
         for key in sorted(metrics.keys()):
-            if key.endswith("_mae") and key != "mae" and not key.startswith("interval_"):
+            if key.endswith("_mae") and key != "mae":
                 dtype_name = key.replace("_mae", "")
                 count = metrics.get(f"{dtype_name}_count", 0)
                 mae = metrics[key]
                 sign_acc = metrics.get(f"{dtype_name}_sign_accuracy", float("nan"))
                 print(f"  {dtype_name}: n={count}, MAE={mae:.3f}, sign_acc={sign_acc:.3f}")
-
-        # Per-interval breakdown
-        interval_breakdown = metrics.get("interval_breakdown", {})
-        if interval_breakdown:
-            print("-" * 60)
-            print("Breakdown by compare interval:")
-            for label, stats in sorted(interval_breakdown.items(),
-                                        key=lambda x: (0, 0) if x[0] == "sf" else (1, int(x[0].split("-")[1]))):
-                print(f"  {label:>10s}: n={stats['count']:>4d}, sign_acc={stats['sign_accuracy']:.3f}, MAE={stats['mae']:.3f}")
 
         print("=" * 60)
 

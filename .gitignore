@@ -150,3 +150,10 @@ wandb/
 aws/
 awscliv2.zip
 chown.sh
+
+realworld_dataset/
+progresLM_dataset/
+progresLM_dataset_realworld/
+incontext_examples/
+rover-vlm/
+ProgressLM/

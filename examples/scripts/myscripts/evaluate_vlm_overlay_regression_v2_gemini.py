@@ -5,25 +5,12 @@ Loads a trained checkpoint and evaluates it on one or more datasets using
 on-the-fly video frame decoding (matching the v2 training pipeline).
 
 Usage:
-export GOOGLE_API_KEY="AIzaSyDz5juA63feTZpUReaD7KEIzNiNQVWekL0"
-# Single dataset
-CUDA_VISIBLE_DEVICES=0 python3 examples/scripts/myscripts/evaluate_vlm_overlay_regression_v2.py \
-    --model_name_or_path outputs/jan29/PnPAll_20260129_222205/checkpoint-8000 \
-    --base_dataset_path /workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/feb7_na_na_16_mg_place_PnPStoveToCounter_mg_fixed_224 \
+export GOOGLE_API_KEY="AIzaSyCE3XxOpsV5H2-B_hXWM37yYDdBv03l5jc"
+python3 examples/scripts/myscripts/evaluate_vlm_overlay_regression_v2_gemini.py \
+    --model_name_or_path "gemini-3-flash-preview" \
+    --base_dataset_path "/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToStove","/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPStoveToCounter","/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToMicrowave","/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPMicrowaveToCounter","/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToSink","/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPSinkToCounter","/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCoffeeServeMug","/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCabToCounter","/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToCab" \
     --split val \
-    --compare_interval 4,8,12,16 \
-    --batch_size 10 \
-    --num_samples 10 \
-    --train_val_split_index 5 \
-    --visualize
-CUDA_VISIBLE_DEVICES=0 python3 /workspace/hf_trl/trl/examples/scripts/myscripts/evaluate_vlm_overlay_regression_v2.py \
-    --model_name_or_path /workspace/hf_trl/trl/examples/scripts/myscripts/evaluate_ROVER.py     --model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
-    --base_dataset_path /workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/feb7_na_na_16_mg_place_PnPSinkToCounter_mg_fixed_224 \
-    --split val \
-    --compare_interval 8,16 \
-    --batch_size 100 \
-    --num_samples 1000 \
-    --train_val_split_index 5 \
+    --num_samples 50 \
     --visualize
 
 """
@@ -43,8 +30,11 @@ import numpy as np
 import torch
 from PIL import Image
 from tqdm import tqdm
-from transformers import AutoModelForImageTextToText, AutoProcessor
-
+import time
+import re
+import time
+from google import genai
+from google.genai import types
 from video_frame_utils import create_side_by_side, extract_frame, find_job_dirs
 
 # Import shared code from training script
@@ -56,9 +46,19 @@ from sft_vlm_overlay_regression_v2 import (
     match_failures_to_successes,
     balance_by_demo_id,
     build_frame_pairs,
-    compute_failure_filter_stats
 )
 
+# Updated to enforce a JSON schema
+SYSTEM_PROMPT = """You are a robot task evaluator. The following are two images of a robot performing a task.
+You must respond with a JSON object containing a single key "choice" and a single reasoning key.
+The value of "choice" must be either "LEFT" (if the left image shows more progress towards completing the task) or "RIGHT" (if the right image shows more progress towards completing the task).
+
+Example Output:
+{"choice": "RIGHT", "reasoning": "<reasoning>"}
+"""
+
+USER_PROMPT_TEMPLATE = """Task: {task_token}
+Analyze the images and return the JSON decision."""
 
 # ============================================================================
 # Inference
@@ -71,115 +71,106 @@ def extract_number(text: str) -> Optional[float]:
     return float(m.group(0))
 
 
-def run_inference(model, processor, pairs, batch_size, device, max_new_tokens=64):
-    """Run batched inference and return results."""
+def run_inference(client, model_name, pairs, batch_size, device, max_new_tokens=64):
+    """Run inference using Google Gemini API."""
     results = []
-    num_batches = (len(pairs) + batch_size - 1) // batch_size
+    
+    # We iterate through the list. 
+    # Note: 'batch_size' is less relevant for API calls unless using async, 
+    # but we keep the structure to minimize script changes.
+    
+    print(f"Starting evaluation on {len(pairs)} pairs using {model_name}...")
 
-    for b in tqdm(range(num_batches), desc="Evaluating"):
-        batch = pairs[b * batch_size : (b + 1) * batch_size]
-        texts = []
-        images_list = []
+    for i, item in enumerate(tqdm(pairs, desc="Evaluating")):
+        # 1. Prepare Images
+        try:
+            frame1 = extract_frame(item["video_path_1"], item["frame_idx_1"])
+            frame2 = extract_frame(item["video_path_2"], item["frame_idx_2"])
+            overlay = create_side_by_side(frame1, frame2)
+        except Exception as e:
+            print(f"Warning: failed to load frames: {e}")
+            overlay = Image.new("RGB", (256, 128), (128, 128, 128))
 
-        for item in batch:
-            try:
-                frame1 = extract_frame(item["video_path_1"], item["frame_idx_1"])
-                frame2 = extract_frame(item["video_path_2"], item["frame_idx_2"])
-                overlay = create_side_by_side(frame1, frame2)
-            except Exception as e:
-                print(f"Warning: failed to load frames: {e}")
-                overlay = Image.new("RGB", (256, 128), (128, 128, 128))
+        # 2. Prepare Prompt
+        # Gemini works best with a direct instruction + image
+        user_prompt_text = USER_PROMPT_TEMPLATE.format(task_token=item["task_token"])
+        
+        # Combine System Prompt + User Prompt for the API call
+        # (Gemini supports system instructions, but for simplicity we append)
+        full_prompt = f"{user_prompt_text}"
 
-            # Build user prompt from task_token
-            user_prompt = USER_PROMPT_TEMPLATE.format(task_token=item["task_token"])
-
-            conversation = [
-                {"role": "system", "content": [{"type": "text", "text": SYSTEM_PROMPT}]},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "image": overlay},
-                        {"type": "text", "text": user_prompt},
-                    ],
-                },
-            ]
-
-            try:
-                import qwen_vl_utils
-                image_input, _ = qwen_vl_utils.process_vision_info(conversation)
-            except (ImportError, Exception):
-                image_input = [overlay]
-
-            text = processor.apply_chat_template(
-                conversation, tokenize=False, add_generation_prompt=True
+        # 3. Call API
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=[overlay, full_prompt],
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    temperature=0.1,                 # Low temp for deterministic choices
+                    response_mime_type="application/json"  # <--- CRITICAL CHANGE
+                )
             )
-            texts.append(text)
-            images_list.append(image_input)
+            completion = response.text.strip()
+            
+        except Exception as e:
+            print(f"\nAPI Error on item {i}: {e}")
+            completion = "Error"
+            # Optional: Sleep if rate limit hit
+            time.sleep(2)
 
-        inputs = processor(
-            text=texts,
-            images=images_list if any(img is not None for img in images_list) else None,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=2048,
-        )
-        inputs = {k: v.to(device) if hasattr(v, "to") else v for k, v in inputs.items()}
-
-        with torch.no_grad():
-            outputs = model.generate(
-                **inputs, max_new_tokens=max_new_tokens, temperature=0.1, top_p=0.95, do_sample=True
-            )
-
-        for i, item in enumerate(batch):
-            gen_tokens = outputs[i, inputs["input_ids"].shape[1] :]
-            completion = processor.decode(gen_tokens, skip_special_tokens=True).strip()
-            pred = extract_number(completion)
-            gt = float(item["correct_answer"])
-
-            if pred is not None:
-                pred = max(-100.0, min(100.0, pred))
-                error = pred - gt
-                abs_error = abs(error)
-                sign_correct = (np.sign(gt) == np.sign(pred)) if gt != 0 else (pred == 0)
+        # 4. Process Result (Same as original script)
+        try:
+            # 1. Parse the JSON response
+            result_json = json.loads(completion)
+            prediction_str = result_json.get("choice", "").upper().strip()
+            
+            # 2. Map string to your numeric format if needed (e.g., RIGHT=1, LEFT=0 or -1)
+            # Assuming standard classification:
+            if prediction_str == "RIGHT":
+                pred = 32.0
+            elif prediction_str == "LEFT":
+                pred = -32.0 # or -1.0 depending on your ground truth format
             else:
-                error = None
-                abs_error = None
-                sign_correct = None
+                print(f"Invalid JSON value: {prediction_str}")
+                continue
 
-            results.append({
-                "ground_truth": gt,
-                "prediction": pred,
-                "raw_completion": completion,
-                "error": error,
-                "abs_error": abs_error,
-                "sign_correct": bool(sign_correct) if sign_correct is not None else None,
-                "demo_type": item.get("demo_success", "unknown"),
-                "demo_id": item.get("demo_id", "unknown"),
-                "task_token": item["task_token"],
-                "frame_idx_1": item["frame_idx_1"],
-                "frame_idx_2": item["frame_idx_2"],
-                "video_path_1": item["video_path_1"],
-                "video_path_2": item["video_path_2"],
-            })
+        except json.JSONDecodeError:
+            print(f"Failed to decode JSON: {completion}")
+            continue
+  
+        gt = float(item["correct_answer"])
+
+        if pred is not None:
+            pred = max(-100.0, min(100.0, pred))
+            error = pred - gt
+            abs_error = abs(error)
+            sign_correct = (np.sign(gt) == np.sign(pred)) if gt != 0 else (pred == 0)
+        else:
+            error = None
+            abs_error = None
+            sign_correct = None
+
+        results.append({
+            "ground_truth": gt,
+            "prediction": pred,
+            "raw_completion": completion,
+            "error": error,
+            "abs_error": abs_error,
+            "sign_correct": bool(sign_correct) if sign_correct is not None else None,
+            "demo_type": item.get("demo_success", "unknown"),
+            "demo_id": item.get("demo_id", "unknown"),
+            "task_token": item["task_token"],
+            "frame_idx_1": item["frame_idx_1"],
+            "frame_idx_2": item["frame_idx_2"],
+            "video_path_1": item["video_path_1"],
+            "video_path_2": item["video_path_2"],
+        })
 
     return results
-
 
 # ============================================================================
 # Metrics & Visualization
 # ============================================================================
-
-def _get_interval_label(r):
-    """Classify a result as 'intra-N' (same video, N frames apart) or 'sf' (success-failure)."""
-    f1 = r.get("frame_idx_1")
-    f2 = r.get("frame_idx_2")
-    v1 = r.get("video_path_1")
-    v2 = r.get("video_path_2")
-    if v1 == v2 and isinstance(f1, int) and isinstance(f2, int):
-        return f"intra-{abs(f2 - f1)}"
-    return "sf"
-
 
 def compute_metrics(results, tolerance=3):
     valid = [r for r in results if r["prediction"] is not None]
@@ -211,25 +202,6 @@ def compute_metrics(results, tolerance=3):
         metrics[f"{dtype}_count"] = len(subset)
         metrics[f"{dtype}_mae"] = float(np.mean(sub_abs))
         metrics[f"{dtype}_sign_accuracy"] = float(np.mean(sub_sign))
-
-    # Per interval breakdown
-    interval_groups = defaultdict(list)
-    for r in valid:
-        interval_groups[_get_interval_label(r)].append(r)
-
-    interval_metrics = {}
-    for label, group in sorted(interval_groups.items()):
-        g_sign = [r["sign_correct"] for r in group]
-        interval_metrics[label] = {
-            "count": len(group),
-            "sign_accuracy": float(np.mean(g_sign)),
-            "mae": float(np.mean([r["abs_error"] for r in group])),
-        }
-        metrics[f"interval_{label}_count"] = len(group)
-        metrics[f"interval_{label}_sign_accuracy"] = float(np.mean(g_sign))
-        metrics[f"interval_{label}_mae"] = float(np.mean([r["abs_error"] for r in group]))
-
-    metrics["interval_breakdown"] = interval_metrics
 
     return metrics
 
@@ -285,44 +257,7 @@ def visualize_results(results, output_dir, num_examples=8):
     plt.savefig(viz_dir / "error_distribution.png", dpi=150, bbox_inches="tight")
     plt.close()
 
-    # --- Plot 2: Sign accuracy breakdown by interval ---
-    interval_groups = defaultdict(list)
-    for r in valid:
-        interval_groups[_get_interval_label(r)].append(r)
-
-    if interval_groups:
-        def _sort_key(label):
-            if label == "sf":
-                return (0, 0)
-            return (1, int(label.split("-")[1]))
-
-        sorted_labels = sorted(interval_groups.keys(), key=_sort_key)
-        accuracies = [np.mean([r["sign_correct"] for r in interval_groups[l]]) * 100 for l in sorted_labels]
-        counts = [len(interval_groups[l]) for l in sorted_labels]
-
-        fig, ax = plt.subplots(figsize=(max(6, len(sorted_labels) * 1.5), 5))
-        bars = ax.bar(range(len(sorted_labels)), accuracies,
-                      color=["#e74c3c" if l == "sf" else "#3498db" for l in sorted_labels],
-                      edgecolor="black", alpha=0.85)
-
-        for i, (bar, acc, cnt) in enumerate(zip(bars, accuracies, counts)):
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1,
-                    f"{acc:.1f}%\n(n={cnt})", ha="center", va="bottom", fontsize=10, fontweight="bold")
-
-        ax.set_xticks(range(len(sorted_labels)))
-        ax.set_xticklabels(sorted_labels, fontsize=11)
-        ax.set_ylabel("Sign Accuracy (%)", fontsize=12)
-        ax.set_xlabel("Pair Type", fontsize=12)
-        ax.set_title("Sign Accuracy by Compare Interval", fontsize=14, fontweight="bold")
-        ax.set_ylim(0, min(max(accuracies) + 15, 105))
-        ax.axhline(y=50, color="gray", linestyle="--", alpha=0.5, label="Chance (50%)")
-        ax.legend()
-
-        plt.tight_layout()
-        plt.savefig(viz_dir / "accuracy_by_interval.png", dpi=150, bbox_inches="tight")
-        plt.close()
-
-    # --- Plot 3: Sample overlays with predictions ---
+    # --- Plot 2: Sample overlays with predictions ---
     worst = sorted(valid, key=lambda x: x["abs_error"], reverse=True)[:num_examples]
     best = sorted(valid, key=lambda x: x["abs_error"])[:num_examples]
 
@@ -392,7 +327,7 @@ def parse_args():
                    help="Comma-separated frame intervals for success pair comparisons")
     p.add_argument("--sample_interval", type=int, default=5,
                    help="Frame sampling stride when building pairs")
-    p.add_argument("--batch_size", type=int, default=8)
+    p.add_argument("--batch_size", type=int, default=1)
     p.add_argument("--num_samples", type=int, default=None,
                    help="Limit number of eval pairs (random subset)")
     p.add_argument("--tolerance", type=int, default=3,
@@ -456,53 +391,28 @@ def main():
     random.seed(args.seed)
     np.random.seed(args.seed)
 
+    # Device is not used for inference, but kept for compatibility if needed
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     compare_intervals = [int(x.strip()) for x in args.compare_interval.split(",")]
 
     dataset_paths = _split_dataset_paths(args.base_dataset_path)
     if not dataset_paths:
-        raise ValueError("--base_dataset_path is empty after parsing. Provide a path or CSV list.")
+        raise ValueError("--base_dataset_path is empty.")
 
-    # Root output dir (one folder for the whole run)
     root_output_dir = args.output_dir or os.path.join(
-        args.model_name_or_path,
-        f"{args.prefix}eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{'_'.join(map(str, compare_intervals))}"
+        "outputs", # Changed from args.model_name_or_path to generic folder
+        f"{args.prefix}gemini_eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     )
     os.makedirs(root_output_dir, exist_ok=True)
 
-    # ---- Load model ONCE ----
-    print("Loading model...")
-    dtype_map = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16, "auto": "auto"}
-    dtype = dtype_map.get(args.dtype, "auto")
-
-    # Check if checkpoint is a PEFT adapter
-    is_peft = os.path.exists(os.path.join(args.model_name_or_path, "adapter_config.json"))
-
-    if is_peft:
-        from peft import PeftModel
-        print(f"Loading base model from {args.base_model_name_or_path}")
-        model = AutoModelForImageTextToText.from_pretrained(
-            args.base_model_name_or_path,
-            torch_dtype=dtype if dtype != "auto" else None,
-            device_map="auto",
-            trust_remote_code=True,
-        )
-        print(f"Loading PEFT adapter from {args.model_name_or_path}")
-        model = PeftModel.from_pretrained(model, args.model_name_or_path, is_trainable=False)
-        processor_path = args.base_model_name_or_path
-    else:
-        print(f"Loading full model from {args.model_name_or_path}")
-        model = AutoModelForImageTextToText.from_pretrained(
-            args.model_name_or_path,
-            torch_dtype=dtype if dtype != "auto" else None,
-            device_map="auto",
-            trust_remote_code=True,
-        )
-        processor_path = args.model_name_or_path
-
-    processor = AutoProcessor.from_pretrained(processor_path, trust_remote_code=True)
-    model.eval()
-    print("Model loaded")
+    # ---- INITIALIZE GEMINI CLIENT ----
+    print(f"Initializing Gemini Client for model: {args.model_name_or_path}")
+    # args.model_name_or_path should now be the string ID (e.g., 'gemini-2.0-flash-exp')
+    client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY"))
+    
+    # We pass the client and model name instead of the loaded pytorch model
+    model = client 
+    processor = None # Not needed for API
 
     all_metrics = {}
     all_summaries = []
@@ -592,16 +502,6 @@ def main():
                     cached = json.load(f)
                     success_mean_diffs_at_idx = cached["success_mean_diffs_at_idx"]
                 print("  Will apply same failure-frame filter as training to match train/eval distribution")
-            else:
-                print("No cached stats found, computing failure filter stats...")
-                success_mean_diffs_at_idx = compute_failure_filter_stats(
-                    success_by_demo, failure_by_demo, 0, 1
-                )
-                stats_cache_file = Path(base_dataset_path) / "failure_filter_stats.json"
-                with open(stats_cache_file, "w") as f:
-                    json.dump({"success_mean_diffs_at_idx": success_mean_diffs_at_idx}, f)
-                print(f"Saved failure filter stats to {stats_cache_file}")
-
         else:
             success_mean_diffs_at_idx = {}
             print("Skipping failure filter stats (no failure data)")
@@ -626,7 +526,14 @@ def main():
             print(f"Subsampled to {len(pairs)} pairs")
 
         # ---- Run inference ----
-        results = run_inference(model, processor, pairs, args.batch_size, device)
+
+        results = run_inference(
+            model, # This is now the client object
+            args.model_name_or_path, # This is the model string ID
+            pairs, 
+            args.batch_size, 
+            device
+        )
 
         # ---- Compute metrics ----
         metrics = compute_metrics(results, tolerance=args.tolerance)
@@ -649,21 +556,12 @@ def main():
 
         # Per demo_type breakdown
         for key in sorted(metrics.keys()):
-            if key.endswith("_mae") and key != "mae" and not key.startswith("interval_"):
+            if key.endswith("_mae") and key != "mae":
                 dtype_name = key.replace("_mae", "")
                 count = metrics.get(f"{dtype_name}_count", 0)
                 mae = metrics[key]
                 sign_acc = metrics.get(f"{dtype_name}_sign_accuracy", float("nan"))
                 print(f"  {dtype_name}: n={count}, MAE={mae:.3f}, sign_acc={sign_acc:.3f}")
-
-        # Per-interval breakdown
-        interval_breakdown = metrics.get("interval_breakdown", {})
-        if interval_breakdown:
-            print("-" * 60)
-            print("Breakdown by compare interval:")
-            for label, stats in sorted(interval_breakdown.items(),
-                                        key=lambda x: (0, 0) if x[0] == "sf" else (1, int(x[0].split("-")[1]))):
-                print(f"  {label:>10s}: n={stats['count']:>4d}, sign_acc={stats['sign_accuracy']:.3f}, MAE={stats['mae']:.3f}")
 
         print("=" * 60)
 

@@ -32,7 +32,8 @@ pip3 install \
     wandb \
     qwen_vl_utils \
     matplotlib \
-    decord
+    decord \
+    boto3
 
 echo "✅ Installation complete!"
 

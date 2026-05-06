@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:app.mediasilo.com)",
+      "WebFetch(domain:api.shift.io)",
+      "Bash(python3:*)",
+      "Bash(pip install:*)",
+      "Bash(ls -d outputs/realworld_all_*/)",
+      "Bash(ls outputs/realworld_all_20260223_153806/checkpoint-*/adapter_config.json 2>/dev/null || ls -d outputs/realworld_all_20260223_153806/checkpoint-*/ 2>/dev/null)",
+      "WebSearch",
+      "WebFetch(domain:rover-vlm.github.io)",
+      "WebFetch(domain:arxiv.org)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(ls -d /workspace/hf_trl/trl/externals/robocasa/datasets/v0.1/single_stage/kitchen_coffee/CoffeePressButton/2024-04-25/*/ 2>/dev/null | head -5)",
+      "Bash(git config --global --add safe.directory /workspace/hf_trl/trl && git log --oneline -20)",
+      "Bash(gh api repos/ProgressLM/ProgressLM/git/trees/main?recursive=1 --jq '.tree[].path' 2>/dev/null | head -200)",
+      "Bash(gh repo view ProgressLM/ProgressLM --json name,description 2>&1; gh api repos/ProgressLM/ProgressLM/contents/ --jq '.[].name' 2>&1)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:progresslm.github.io)",
+      "Bash(gh api repos/ProgressLM/ProgressLM --jq '.description, .default_branch' 2>&1 || echo \"gh failed, trying curl\")",
+      "Bash(ls realworld_dataset/PushCoasterToMug-Nominal-real/*/ 2>/dev/null | head -20)",
+      "Bash(ls /tmp/test_progresslm_realworld/PutKiwiInCenterOfTable-ObjectCentricDistributionShift-real/0/demo_*.png)"
+    ]
+  }
+}

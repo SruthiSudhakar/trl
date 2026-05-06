@@ -139,6 +139,20 @@ def parse_args():
     parser.add_argument("--batch_size_train", type=int, default=16)
     parser.add_argument("--batch_size_val", type=int, default=16)
     parser.add_argument("--vlm_balance_data", type=str, default="false")
+
+    # Training hyperparameters (previously hardcoded)
+    parser.add_argument("--eval_strategy", type=str, default="steps")
+    parser.add_argument("--logging_steps", type=int, default=500)
+    parser.add_argument("--eval_steps", type=int, default=500)
+    parser.add_argument("--save_steps", type=int, default=500)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
+    parser.add_argument("--num_train_epochs", type=int, default=500)
+    parser.add_argument("--learning_rate", type=float, default=1e-5)
+    parser.add_argument("--report_to", type=str, default="wandb")
+    parser.add_argument("--deepspeed_config", type=str, default="sagemaker/ds_config_zero2.json")
+    parser.add_argument("--bf16", type=str, default="true")
+    parser.add_argument("--compare_interval", type=str, default="4,8,12,16")
+    parser.add_argument("--gradient_checkpointing", type=str, default="false")
     return parser.parse_args()
 
 
@@ -244,22 +258,24 @@ def main_after_setup(args):
         "output_dir": args.vlm_output_dir,
         "base_dataset_path": args.vlm_base_dataset_path,
         "split": args.vlm_split,
-        "eval_strategy": "steps",
-        "logging_steps": 1,
-        "eval_steps": 1,
-        "save_steps": 1,
-        "gradient_accumulation_steps": 1,
-        "num_train_epochs": 500,
-        "learning_rate": 1e-5,
+        "eval_strategy": args.eval_strategy,
+        "logging_steps": args.logging_steps,
+        "eval_steps": args.eval_steps,
+        "save_steps": args.save_steps,
+        "gradient_accumulation_steps": args.gradient_accumulation_steps,
+        "num_train_epochs": args.num_train_epochs,
+        "learning_rate": args.learning_rate,
         "per_device_train_batch_size": args.batch_size_train,
         "per_device_eval_batch_size": args.batch_size_val,
-        "report_to": "wandb",
-        "deepspeed": "sagemaker/ds_config_zero2.json",
-        "bf16": True,
-        # "gradient_checkpointing": True,
-        "compare_interval": "4,8,12,16",
+        "report_to": args.report_to,
+        "deepspeed": args.deepspeed_config,
+        "bf16": args.bf16.lower() in ("true", "1", "yes"),
+        "compare_interval": args.compare_interval,
         "balance_data": args.vlm_balance_data.lower() in ("true", "1", "yes"),
     }
+
+    if args.gradient_checkpointing.lower() in ("true", "1", "yes"):
+        hyperparameters["gradient_checkpointing"] = True
 
     distribution = {
         "torch_distributed": {
@@ -271,7 +287,7 @@ def main_after_setup(args):
         "WANDB_API_KEY": os.environ.get("WANDB_API_KEY", "465628e1cdd752aed296abe6439dedcec6fb3292"),
         "WANDB_ENTITY": os.environ.get("WANDB_ENTITY", ""),
         "WANDB__SERVICE_WAIT": "300",
-        "HF_TOKEN": os.environ.get("HF_TOKEN", "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"),
+        "HF_TOKEN": os.environ.get("HF_TOKEN", ""),
         "HF_HOME": "/tmp",
         "INSTANCE_COUNT": str(args.instance_count),
         "SM_USE_RESERVED_CAPACITY": "1",

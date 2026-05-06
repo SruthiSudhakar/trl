@@ -7,25 +7,13 @@ on-the-fly video frame decoding (matching the v2 training pipeline).
 Usage:
 export GOOGLE_API_KEY="AIzaSyDz5juA63feTZpUReaD7KEIzNiNQVWekL0"
 # Single dataset
-CUDA_VISIBLE_DEVICES=0 python3 examples/scripts/myscripts/evaluate_vlm_overlay_regression_v2.py \
-    --model_name_or_path outputs/jan29/PnPAll_20260129_222205/checkpoint-8000 \
-    --base_dataset_path /workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/feb7_na_na_16_mg_place_PnPStoveToCounter_mg_fixed_224 \
+CUDA_VISIBLE_DEVICES=7 python3 examples/scripts/myscripts/evaluate_GVL_first_last.py \
+    --base_dataset_path "/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToStove" \
     --split val \
-    --compare_interval 4,8,12,16 \
     --batch_size 10 \
-    --num_samples 10 \
+    --num_samples 100 \
     --train_val_split_index 5 \
     --visualize
-CUDA_VISIBLE_DEVICES=0 python3 /workspace/hf_trl/trl/examples/scripts/myscripts/evaluate_vlm_overlay_regression_v2.py \
-    --model_name_or_path /workspace/hf_trl/trl/examples/scripts/myscripts/evaluate_ROVER.py     --model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
-    --base_dataset_path /workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/feb7_na_na_16_mg_place_PnPSinkToCounter_mg_fixed_224 \
-    --split val \
-    --compare_interval 8,16 \
-    --batch_size 100 \
-    --num_samples 1000 \
-    --train_val_split_index 5 \
-    --visualize
-
 """
 
 import argparse
@@ -44,20 +32,127 @@ import torch
 from PIL import Image
 from tqdm import tqdm
 from transformers import AutoModelForImageTextToText, AutoProcessor
+import pdb
 
 from video_frame_utils import create_side_by_side, extract_frame, find_job_dirs
 
 # Import shared code from training script
 from sft_vlm_overlay_regression_v2 import (
-    SYSTEM_PROMPT,
-    USER_PROMPT_TEMPLATE,
-    TASK_TOKENS,
     load_trajectories,
     match_failures_to_successes,
     balance_by_demo_id,
     build_frame_pairs,
-    compute_failure_filter_stats
 )
+TASK_TOKENS = {
+    "PnPCounterToCab": "[COUNTER_TO_CAB]",
+    "PnPCabToCounter": "[CAB_TO_COUNTER]",
+    "PnPCounterToMicrowave": "[COUNTER_TO_MICROWAVE]",
+    "PnPMicrowaveToCounter": "[MICROWAVE_TO_COUNTER]",
+    "PnPStoveToCounter": "[STOVE_TO_COUNTER]",
+    "PnPCounterToStove": "[COUNTER_TO_STOVE]",
+    "PnPCounterToSink": "[COUNTER_TO_SINK]",
+    "PnPSinkToCounter": "[SINK_TO_COUNTER]",
+    "PnPCoffeeServeMug": "[COFFEE_SERVE_MUG]",
+    "CoffeeServeMug": "[COFFEE_SERVE_MUG]",
+    "PnPCloseDrawer": "[CLOSE_DRAWER]",
+    "PnPCoffeeSetupMug": "[COFFEE_SETUP_MUG]",
+    # Realworld dataset tasks
+    "PutKiwiInCenterOfTable": "[PUT_KIWI_IN_CENTER_OF_TABLE]",
+    "PushCoasterToMug": "[PUSH_COASTER_TO_MUG]",
+    "TurnMugRightsideUp": "[TURN_MUG_RIGHTSIDE_UP]",
+    "BimanualBikeRotorInstall": "[BIKE_ROTOR_INSTALL]",
+    "BimanualClearKitchenCounter": "[CLEAR_KITCHEN_COUNTER]",
+    "BimanualSetUpBreakfastTable": "[SETUP_BREAKFAST_TABLE]",
+    "CleanLitterBox": "[CLEAN_LITTERBOX]",
+    "CutAppleIntoSlices": "[CUT_APPLE]",
+
+}
+TASK_TOKEN_TO_DESC = {
+    "[COUNTER_TO_CAB]": "Pick up the object from the counter and place it in the cabinet",
+    "[CAB_TO_COUNTER]": "Pick up the object from the cabinet and place it on the counter",
+    "[COUNTER_TO_MICROWAVE]": "Pick up the object from the counter and place it in the microwave",
+    "[MICROWAVE_TO_COUNTER]": "Pick up the object from the microwave and place it on the counter",
+    "[STOVE_TO_COUNTER]": "Pick up the object from the stove and place it on the counter",
+    "[COUNTER_TO_STOVE]": "Pick up the object from the counter and place it on the stove",
+    "[COUNTER_TO_SINK]": "Pick up the object from the counter and place it in the sink",
+    "[SINK_TO_COUNTER]": "Pick up the object from the sink and place it on the counter",
+    "[COFFEE_SERVE_MUG]": "Pick up the mug from the coffee machine and place it on the counter",
+    "[CLOSE_DRAWER]": "Close the drawer",
+    "[COFFEE_SETUP_MUG]": "Pick up the mug from the coffee machine and place it on the counter",
+    "[PUT_KIWI_IN_CENTER_OF_TABLE]": "Pick up the kiwi and place it in the center of the table",
+    "[PUSH_COASTER_TO_MUG]": "Pick up the coaster and place it on the mug",
+    "[TURN_MUG_RIGHTSIDE_UP]": "Turn the mug rightside up",
+    "[BIKE_ROTOR_INSTALL]": "Install the bike rotor",
+    "[CLEAR_KITCHEN_COUNTER]": "Clear the kitchen counter",
+    "[SETUP_BREAKFAST_TABLE]": "Setup the breakfast table",
+    "[CLEAN_LITTERBOX]": "Clean the litterbox",
+    "[CUT_APPLE]": "Cut the apple into slices",
+}
+TASK_TOKEN_TO_CONTEXT = {
+    "[COUNTER_TO_CAB]": {
+        "initial_scene": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCounterToCab.mp4', 0),
+        "frame1": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCounterToCab.mp4', 95),
+        "answer": "{\"Frame Description\": \"The robot has successfully placed the object in the cabinet\", \"Task Completion Percentage\": 100}"
+    },
+    "[CAB_TO_COUNTER]": {
+        "initial_scene": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCabToCounter.mp4', 0),
+        "frame1": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCabToCounter.mp4', 130),
+        "answer": "{\"Frame Description\": \"The robot has successfuly placed the object on the counter\", \"Task Completion Percentage\": 100}"
+    },
+    "[COUNTER_TO_MICROWAVE]": {
+        "initial_scene": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCounterToMicrowave.mp4', 0),
+        "frame1": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCounterToMicrowave.mp4', 230),
+        "answer": "{\"Frame Description\": \"The robot has successfuly placed the object in the microwave\", \"Task Completion Percentage\": 100}"
+
+    },
+    "[MICROWAVE_TO_COUNTER]": {
+        "initial_scene": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPMicrowaveToCounter.mp4', 0),
+        "frame1": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPMicrowaveToCounter.mp4', 120),
+        "answer": "{\"Frame Description\": \"The robot has successfuly placed the object on the counter\", \"Task Completion Percentage\": 100}"
+
+    },
+    "[STOVE_TO_COUNTER]": {
+        "initial_scene": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPStoveToCounter.mp4', 0),
+        "frame1": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPStoveToCounter.mp4', 108),
+        "answer": "{\"Frame Description\": \"The robot successfuly placed the object on the counter\", \"Task Completion Percentage\": 100}"
+    },
+    "[COUNTER_TO_STOVE]": {
+        "initial_scene": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCounterToStove.mp4', 0),
+        "frame1": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCounterToStove.mp4', 180),
+        "answer": "{\"Frame Description\": \"The robot has successfuly placed the object on the stove\", \"Task Completion Percentage\": 100}"
+    },
+    "[COUNTER_TO_SINK]": {
+        "initial_scene": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCounterToSink.mp4', 0),
+        "frame1": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCounterToSink.mp4', 180),
+        "answer": "{\"Frame Description\": \"The robot has successfuly placed the object in the sink\", \"Task Completion Percentage\": 100}"
+    },
+    "[SINK_TO_COUNTER]": {
+        "initial_scene": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPSinkToCounter.mp4', 0),
+        "frame1": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPSinkToCounter.mp4', 120),
+        "answer": "{\"Frame Description\": \"The robot has successfuly placed the object on the counter\", \"Task Completion Percentage\": 100}"
+    },
+    "[COFFEE_SERVE_MUG]": {
+        "initial_scene": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCoffeeServeMug.mp4', 0),
+        "frame1": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCoffeeServeMug.mp4', 169),
+        "answer": "{\"Frame Description\": \"The robot has successfuly placed the mug on the counter\", \"Task Completion Percentage\": 100}"
+    },
+    "[CLOSE_DRAWER]": {
+        "initial_scene": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCloseDrawer.mp4', 0),
+        "frame1": extract_frame('/workspace/hf_trl/trl/incontext_examples/PnPCloseDrawer.mp4', 171),
+        "answer": "{\"Frame Description\": \"The robot has successfuly closed the drawer\", \"Task Completion Percentage\": 100}"
+    },
+}
+
+
+IN_CONTEXT_EXAMPLE = """You are an expert roboticist tasked to predict if a robot has succeeded or failed at a task. The task is: {task_token}. You will recieve an image of the robot before the task has started (initial scene) and when the robot has either succeeded or failed at the task. If the robot has succeeded, output 100, if it has failed, output 0. Here is an example."""
+USER_PROMPT_TEMPLATE = """Now, for the task of {task_token}, output 100 if the task is complete or 0 if the task is not complete. Format your response as a json as follows: {\"Frame Description\": \"frame description\", \"Task Completion Percentage\": 0 or 100}. Output MUST be exactly one JSON object like:
+- No Markdown, no ``` fences, no extra text.
+- Use double quotes only.
+- Use key "Task Completion Percentage" (singular) exactly.
+- Percent must be an integer 0 or 100.
+- If uncertain, still output 0 or 100 as a guess.
+"""
+
 
 
 # ============================================================================
@@ -65,10 +160,14 @@ from sft_vlm_overlay_regression_v2 import (
 # ============================================================================
 
 def extract_number(text: str) -> Optional[float]:
-    m = re.search(r"[-+]?\d+(?:\.\d+)?", text)
-    if m is None:
+    try:
+        text = json.loads(text)
+        if int(text['Task Completion Percentage']) == 100:
+            return 32
+        else:
+            return 0
+    except:
         return None
-    return float(m.group(0))
 
 
 def run_inference(model, processor, pairs, batch_size, device, max_new_tokens=64):
@@ -83,32 +182,35 @@ def run_inference(model, processor, pairs, batch_size, device, max_new_tokens=64
 
         for item in batch:
             try:
-                frame1 = extract_frame(item["video_path_1"], item["frame_idx_1"])
-                frame2 = extract_frame(item["video_path_2"], item["frame_idx_2"])
-                overlay = create_side_by_side(frame1, frame2)
+                initial_scene = extract_frame(item["video_path_1"], 0)
+                frame1 = extract_frame(item["video_path_1"], item["frame_idx_1"]-1)
             except Exception as e:
                 print(f"Warning: failed to load frames: {e}")
-                overlay = Image.new("RGB", (256, 128), (128, 128, 128))
-
             # Build user prompt from task_token
-            user_prompt = USER_PROMPT_TEMPLATE.format(task_token=item["task_token"])
-
             conversation = [
-                {"role": "system", "content": [{"type": "text", "text": SYSTEM_PROMPT}]},
+                {"role": "system", "content": [{"type": "text", "text": ""}]},
                 {
                     "role": "user",
                     "content": [
-                        {"type": "image", "image": overlay},
-                        {"type": "text", "text": user_prompt},
+                        {"type": "text", "text": IN_CONTEXT_EXAMPLE.replace("{task_token}", TASK_TOKEN_TO_DESC[item["task_token"]])},
+                        {"type": "text", "text": "Initial robot scene"},
+                        {"type": "image", "image": TASK_TOKEN_TO_CONTEXT[item["task_token"]]["initial_scene"]},
+                        {"type": "text", "text": "Frame 1:"},
+                        {"type": "image", "image": TASK_TOKEN_TO_CONTEXT[item["task_token"]]["frame1"]},
+                        {"type": "text", "text": TASK_TOKEN_TO_CONTEXT[item["task_token"]]["answer"]},
+                        {"type": "text", "text": USER_PROMPT_TEMPLATE.replace("{task_token}", TASK_TOKEN_TO_DESC[item["task_token"]])},
+                        {"type": "text", "text": "Initial robot scene"},
+                        {"type": "image", "image": initial_scene},
+                        {"type": "text", "text": "Frame 1:"},
+                        {"type": "image", "image": frame1},
                     ],
                 },
             ]
-
             try:
                 import qwen_vl_utils
                 image_input, _ = qwen_vl_utils.process_vision_info(conversation)
             except (ImportError, Exception):
-                image_input = [overlay]
+                image_input = [frame1]
 
             text = processor.apply_chat_template(
                 conversation, tokenize=False, add_generation_prompt=True
@@ -125,12 +227,10 @@ def run_inference(model, processor, pairs, batch_size, device, max_new_tokens=64
             max_length=2048,
         )
         inputs = {k: v.to(device) if hasattr(v, "to") else v for k, v in inputs.items()}
-
         with torch.no_grad():
             outputs = model.generate(
                 **inputs, max_new_tokens=max_new_tokens, temperature=0.1, top_p=0.95, do_sample=True
             )
-
         for i, item in enumerate(batch):
             gen_tokens = outputs[i, inputs["input_ids"].shape[1] :]
             completion = processor.decode(gen_tokens, skip_special_tokens=True).strip()
@@ -158,9 +258,9 @@ def run_inference(model, processor, pairs, batch_size, device, max_new_tokens=64
                 "demo_id": item.get("demo_id", "unknown"),
                 "task_token": item["task_token"],
                 "frame_idx_1": item["frame_idx_1"],
-                "frame_idx_2": item["frame_idx_2"],
+                "frame_idx_2": None,
                 "video_path_1": item["video_path_1"],
-                "video_path_2": item["video_path_2"],
+                "video_path_2": None,
             })
 
     return results
@@ -169,17 +269,6 @@ def run_inference(model, processor, pairs, batch_size, device, max_new_tokens=64
 # ============================================================================
 # Metrics & Visualization
 # ============================================================================
-
-def _get_interval_label(r):
-    """Classify a result as 'intra-N' (same video, N frames apart) or 'sf' (success-failure)."""
-    f1 = r.get("frame_idx_1")
-    f2 = r.get("frame_idx_2")
-    v1 = r.get("video_path_1")
-    v2 = r.get("video_path_2")
-    if v1 == v2 and isinstance(f1, int) and isinstance(f2, int):
-        return f"intra-{abs(f2 - f1)}"
-    return "sf"
-
 
 def compute_metrics(results, tolerance=3):
     valid = [r for r in results if r["prediction"] is not None]
@@ -211,25 +300,6 @@ def compute_metrics(results, tolerance=3):
         metrics[f"{dtype}_count"] = len(subset)
         metrics[f"{dtype}_mae"] = float(np.mean(sub_abs))
         metrics[f"{dtype}_sign_accuracy"] = float(np.mean(sub_sign))
-
-    # Per interval breakdown
-    interval_groups = defaultdict(list)
-    for r in valid:
-        interval_groups[_get_interval_label(r)].append(r)
-
-    interval_metrics = {}
-    for label, group in sorted(interval_groups.items()):
-        g_sign = [r["sign_correct"] for r in group]
-        interval_metrics[label] = {
-            "count": len(group),
-            "sign_accuracy": float(np.mean(g_sign)),
-            "mae": float(np.mean([r["abs_error"] for r in group])),
-        }
-        metrics[f"interval_{label}_count"] = len(group)
-        metrics[f"interval_{label}_sign_accuracy"] = float(np.mean(g_sign))
-        metrics[f"interval_{label}_mae"] = float(np.mean([r["abs_error"] for r in group]))
-
-    metrics["interval_breakdown"] = interval_metrics
 
     return metrics
 
@@ -285,44 +355,7 @@ def visualize_results(results, output_dir, num_examples=8):
     plt.savefig(viz_dir / "error_distribution.png", dpi=150, bbox_inches="tight")
     plt.close()
 
-    # --- Plot 2: Sign accuracy breakdown by interval ---
-    interval_groups = defaultdict(list)
-    for r in valid:
-        interval_groups[_get_interval_label(r)].append(r)
-
-    if interval_groups:
-        def _sort_key(label):
-            if label == "sf":
-                return (0, 0)
-            return (1, int(label.split("-")[1]))
-
-        sorted_labels = sorted(interval_groups.keys(), key=_sort_key)
-        accuracies = [np.mean([r["sign_correct"] for r in interval_groups[l]]) * 100 for l in sorted_labels]
-        counts = [len(interval_groups[l]) for l in sorted_labels]
-
-        fig, ax = plt.subplots(figsize=(max(6, len(sorted_labels) * 1.5), 5))
-        bars = ax.bar(range(len(sorted_labels)), accuracies,
-                      color=["#e74c3c" if l == "sf" else "#3498db" for l in sorted_labels],
-                      edgecolor="black", alpha=0.85)
-
-        for i, (bar, acc, cnt) in enumerate(zip(bars, accuracies, counts)):
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1,
-                    f"{acc:.1f}%\n(n={cnt})", ha="center", va="bottom", fontsize=10, fontweight="bold")
-
-        ax.set_xticks(range(len(sorted_labels)))
-        ax.set_xticklabels(sorted_labels, fontsize=11)
-        ax.set_ylabel("Sign Accuracy (%)", fontsize=12)
-        ax.set_xlabel("Pair Type", fontsize=12)
-        ax.set_title("Sign Accuracy by Compare Interval", fontsize=14, fontweight="bold")
-        ax.set_ylim(0, min(max(accuracies) + 15, 105))
-        ax.axhline(y=50, color="gray", linestyle="--", alpha=0.5, label="Chance (50%)")
-        ax.legend()
-
-        plt.tight_layout()
-        plt.savefig(viz_dir / "accuracy_by_interval.png", dpi=150, bbox_inches="tight")
-        plt.close()
-
-    # --- Plot 3: Sample overlays with predictions ---
+    # --- Plot 2: Sample overlays with predictions ---
     worst = sorted(valid, key=lambda x: x["abs_error"], reverse=True)[:num_examples]
     best = sorted(valid, key=lambda x: x["abs_error"])[:num_examples]
 
@@ -343,7 +376,7 @@ def visualize_results(results, output_dir, num_examples=8):
             ax = axes_grid[row, col]
             try:
                 f1 = extract_frame(r["video_path_1"], r["frame_idx_1"])
-                f2 = extract_frame(r["video_path_2"], r["frame_idx_2"])
+                f2 = extract_frame(r["video_path_1"], r["frame_idx_1"])
                 overlay = create_side_by_side(f1, f2)
                 ax.imshow(overlay)
             except Exception:
@@ -376,7 +409,8 @@ def visualize_results(results, output_dir, num_examples=8):
 def parse_args():
     p = argparse.ArgumentParser(description="Test a trained VLM overlay regression v2 model on new dataset(s)")
 
-    p.add_argument("--model_name_or_path", type=str, required=True,
+    p.add_argument("--model_name_or_path", type=str,
+                   default="/workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct",
                    help="Path to trained checkpoint (full model or PEFT adapter)")
     p.add_argument("--base_model_name_or_path", type=str,
                    default="/workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct",
@@ -407,7 +441,11 @@ def parse_args():
                    help="Output directory (defaults to <model_path>/<prefix>eval_<timestamp>_<intervals>)")
     p.add_argument("--prefix", type=str, default="",
                    help="Prefix for output directory")
-
+    p.add_argument(
+        "--exclude_failures",
+        action="store_true",
+        help="Exclude failure trajectories"
+    )
     return p.parse_args()
 
 
@@ -466,7 +504,7 @@ def main():
     # Root output dir (one folder for the whole run)
     root_output_dir = args.output_dir or os.path.join(
         args.model_name_or_path,
-        f"{args.prefix}eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{'_'.join(map(str, compare_intervals))}"
+        f"{args.prefix}GVL_lastframe_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{'_'.join(map(str, compare_intervals))}"
     )
     os.makedirs(root_output_dir, exist_ok=True)
 
@@ -539,90 +577,43 @@ def main():
         print(f"Using {len(job_dirs)} job directories for '{args.split}' split")
 
         success_data, unfiltered_failure_data = load_trajectories(job_dirs)
-        print(f"Loaded {len(success_data)} success + {len(unfiltered_failure_data)} failure trajectories")
-
-        failure_data = match_failures_to_successes(success_data, unfiltered_failure_data)
-        print(f"Matched {len(failure_data)} failures to success trajectories")
-
-        # ============================
-        # Balanced sampling for this task
-        # ============================
-        if success_data and failure_data:
-            success_data, failure_data, success_by_demo, failure_by_demo = balance_by_demo_id(
-                success_data, failure_data, 50
-            )
-        else:
-            # No cross-type balancing, but still cap per demo
-            success_by_demo = defaultdict(list)
-            for sd in success_data:
-                success_by_demo[sd["demo_id"]].append(sd)
-            failure_by_demo = defaultdict(list)
-            for fd in failure_data:
-                failure_by_demo[fd["demo_id"]].append(fd)
-
-            rng = random.Random(42)
-            capped_success = []
-            for demo_id in sorted(success_by_demo.keys()):
-                items = success_by_demo[demo_id]
-                if len(items) > 50:
-                    items = rng.sample(items, 50)
-                    success_by_demo[demo_id] = items
-                capped_success.extend(items)
-            capped_failure = []
-            for demo_id in sorted(failure_by_demo.keys()):
-                items = failure_by_demo[demo_id]
-                if len(items) > 50:
-                    items = rng.sample(items, 50)
-                    failure_by_demo[demo_id] = items
-                capped_failure.extend(items)
-
-            print(f"After per-demo cap ({50}): "
-                        f"{len(success_data)} -> {len(capped_success)} success, "
-                        f"{len(failure_data)} -> {len(capped_failure)} failure")
-            success_data = capped_success
-            failure_data = capped_failure
-
-        # Load cached failure filter stats (same filter used during training)
-        if failure_data:
-            success_mean_diffs_at_idx = None
-            stats_cache_file = Path(base_dataset_path) / "failure_filter_stats.json"
-            if stats_cache_file.exists():
-                print(f"Loading failure filter stats from {stats_cache_file}")
-                with open(stats_cache_file, "r") as f:
-                    cached = json.load(f)
-                    success_mean_diffs_at_idx = cached["success_mean_diffs_at_idx"]
-                print("  Will apply same failure-frame filter as training to match train/eval distribution")
-            else:
-                print("No cached stats found, computing failure filter stats...")
-                success_mean_diffs_at_idx = compute_failure_filter_stats(
-                    success_by_demo, failure_by_demo, 0, 1
-                )
-                stats_cache_file = Path(base_dataset_path) / "failure_filter_stats.json"
-                with open(stats_cache_file, "w") as f:
-                    json.dump({"success_mean_diffs_at_idx": success_mean_diffs_at_idx}, f)
-                print(f"Saved failure filter stats to {stats_cache_file}")
-
-        else:
-            success_mean_diffs_at_idx = {}
-            print("Skipping failure filter stats (no failure data)")
-
+        failure_data = random.sample(unfiltered_failure_data, min(len(success_data), len(unfiltered_failure_data)))
+        pairs = []
         job_name = Path(job_dirs[0]).name if job_dirs else ""
-        pairs = build_frame_pairs(
-            success_data=success_data,
-            failure_data=failure_data,
-            compare_intervals=compare_intervals,
-            train_sample_interval=args.sample_interval,
-            success_mean_diffs_at_idx=success_mean_diffs_at_idx,
-            job_name=job_name,
-            local_rank=0,
-            world_size=1,
-            task_path=base_dataset_path,
-        )
+        # Find task token
+        task_token = None
+        for task_key, token in TASK_TOKENS.items():
+            if task_key in job_name:
+                task_token = token
+                break
+        if task_token is None:
+            raise ValueError(f"No task token found for job name: {job_name}")
+        for item in success_data:
+            pairs.append(
+                {
+                    "task_token": task_token, 
+                    "video_path_1": item["video_path"],
+                    "frame_idx_1": item["trajectory_index"],
+                    "correct_answer": 100,
+                    "demo_id": item["demo_id"],
+                    "demo_success": item["sf"],
+                }
+            )
+        for item in failure_data:
+            pairs.append(
+                {
+                    "task_token": task_token, 
+                    "video_path_1": item["video_path"],
+                    "frame_idx_1": item["trajectory_index"],
+                    "correct_answer": 0,
+                    "demo_id": item["demo_id"],
+                    "demo_success": item["sf"],
+                }
+            )
         print(f"Built {len(pairs)} evaluation pairs")
 
         if args.num_samples and args.num_samples < len(pairs):
-            subsample_rng = random.Random(args.seed)
-            pairs = subsample_rng.sample(pairs, args.num_samples)
+            pairs = random.sample(pairs, args.num_samples)
             print(f"Subsampled to {len(pairs)} pairs")
 
         # ---- Run inference ----
@@ -649,21 +640,12 @@ def main():
 
         # Per demo_type breakdown
         for key in sorted(metrics.keys()):
-            if key.endswith("_mae") and key != "mae" and not key.startswith("interval_"):
+            if key.endswith("_mae") and key != "mae":
                 dtype_name = key.replace("_mae", "")
                 count = metrics.get(f"{dtype_name}_count", 0)
                 mae = metrics[key]
                 sign_acc = metrics.get(f"{dtype_name}_sign_accuracy", float("nan"))
                 print(f"  {dtype_name}: n={count}, MAE={mae:.3f}, sign_acc={sign_acc:.3f}")
-
-        # Per-interval breakdown
-        interval_breakdown = metrics.get("interval_breakdown", {})
-        if interval_breakdown:
-            print("-" * 60)
-            print("Breakdown by compare interval:")
-            for label, stats in sorted(interval_breakdown.items(),
-                                        key=lambda x: (0, 0) if x[0] == "sf" else (1, int(x[0].split("-")[1]))):
-                print(f"  {label:>10s}: n={stats['count']:>4d}, sign_acc={stats['sign_accuracy']:.3f}, MAE={stats['mae']:.3f}")
 
         print("=" * 60)
 

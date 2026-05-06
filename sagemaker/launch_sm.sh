@@ -18,7 +18,7 @@ NAME=$3               # short job name suffix
 
 QUEUE_NAME=${4:-cv-p5en}
 INSTANCE_TYPE=${5:-p5en}     # p4d, p4de, p5, p5en, g6e, ...
-BUILD_TYPE=${6:-None}      # full / update
+BUILD_TYPE=${6:-update}      # full / update
 VERSION=${7:-210}
 USER_NAME=sruthis
 
@@ -37,7 +37,21 @@ PROFILE=default
 REGION=us-west-2
 ARN=arn:aws:iam::124224456861:role/SageMaker-SageMakerAllAccess-us-west-2
 S3_REMOTE_SYNC=s3://tri-ml-sandbox-16011-us-west-2-datasets/sagemaker/s3_remote_sync/
-PRIORITY=${12:-100}
+PRIORITY=${15:-100}
+
+# ─── Training hyperparameters (edit these to change without rebuilding Docker) ───
+EVAL_STRATEGY=${EVAL_STRATEGY:-steps}
+LOGGING_STEPS=${LOGGING_STEPS:-500}
+EVAL_STEPS=${EVAL_STEPS:-500}
+SAVE_STEPS=${SAVE_STEPS:-500}
+GRADIENT_ACCUMULATION_STEPS=${GRADIENT_ACCUMULATION_STEPS:-1}
+NUM_TRAIN_EPOCHS=${NUM_TRAIN_EPOCHS:-500}
+LEARNING_RATE=${LEARNING_RATE:-1e-5}
+REPORT_TO=${REPORT_TO:-wandb}
+DEEPSPEED_CONFIG=${DEEPSPEED_CONFIG:-sagemaker/ds_config_zero2.json}
+BF16=${BF16:-true}
+COMPARE_INTERVAL=${COMPARE_INTERVAL:-"4,8,12,16"}
+GRADIENT_CHECKPOINTING=${GRADIENT_CHECKPOINTING:-false}
 
 AWS_DEFAULT_REGION=${REGION}                            \
     python3 sagemaker/launch_sagemaker_vlm.py    \
@@ -57,12 +71,22 @@ AWS_DEFAULT_REGION=${REGION}                            \
     --version=${VERSION}                                \
     --instance-type=${INSTANCE_TYPE}                    \
     --build-type=${BUILD_TYPE}                          \
-    --version=${VERSION}                                \
     --batch_size_train=${batch_size_train}              \
     --batch_size_val=${batch_size_val}                  \
     --vlm_model_name_or_path="${VLM_MODEL_PATH}"        \
     --vlm_base_dataset_path="${VLM_BASE_DATASET_PATH}"  \
     --vlm_output_dir="${VLM_OUTPUT_DIR}"                \
     --vlm_split="${VLM_SPLIT}"                          \
-    --vlm_balance_data="${BALANCE_DATA}"
-
+    --vlm_balance_data="${BALANCE_DATA}"                \
+    --eval_strategy="${EVAL_STRATEGY}"                  \
+    --logging_steps=${LOGGING_STEPS}                    \
+    --eval_steps=${EVAL_STEPS}                          \
+    --save_steps=${SAVE_STEPS}                          \
+    --gradient_accumulation_steps=${GRADIENT_ACCUMULATION_STEPS} \
+    --num_train_epochs=${NUM_TRAIN_EPOCHS}              \
+    --learning_rate=${LEARNING_RATE}                    \
+    --report_to="${REPORT_TO}"                          \
+    --deepspeed_config="${DEEPSPEED_CONFIG}"            \
+    --bf16="${BF16}"                                    \
+    --compare_interval="${COMPARE_INTERVAL}"            \
+    --gradient_checkpointing="${GRADIENT_CHECKPOINTING}"

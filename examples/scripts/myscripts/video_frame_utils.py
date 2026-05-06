@@ -10,7 +10,7 @@ import hashlib
 import os
 import tempfile
 from functools import lru_cache
-
+import pdb
 from PIL import Image
 
 _S3_VIDEO_CACHE_DIR = os.path.join(tempfile.gettempdir(), "video_s3_cache")

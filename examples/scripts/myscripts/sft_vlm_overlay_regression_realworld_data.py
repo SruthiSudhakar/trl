@@ -39,66 +39,54 @@ aws s3 cp guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_al
     --include "*.mp4" \
     --recursive
 
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --num_processes=8 --gpu_ids=0,1,2,3,4,5,6,7 \
-    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/scripts/myscripts/sft_vlm_overlay_regression_v2.py \
+For visualization/debug first:
+CUDA_VISIBLE_DEVICES=0 accelerate launch --num_processes=1 \
+    examples/scripts/myscripts/sft_vlm_overlay_regression_realworld_data.py \
     --model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
-    --base_dataset_path "/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToStove,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPStoveToCounter,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToMicrowave,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPMicrowaveToCounter,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToSink,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPSinkToCounter,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCoffeeServeMug,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCloseDrawer,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCabToCounter,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToCab" \
-    --output_dir "outputs/feb3/PnPAll_successonly_$(date +%Y%m%d_%H%M%S)" \
-    --eval_strategy steps \
-    --logging_steps 500 \
-    --eval_steps 500 \
-    --save_steps 500 \
-    --gradient_accumulation_steps 1 \
-    --num_train_epochs 500 \
-    --learning_rate 1e-5 \
-    --per_device_train_batch_size 8 \
-    --per_device_eval_batch_size 8 \
-    --report_to wandb \
-    --split train \
-    --compare_interval 4,8,12,16 \
-    --include_successes true \
-    --include_failures false
-
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --num_processes=8 --gpu_ids=0,1,2,3,4,5,6,7 \
-    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/scripts/myscripts/sft_vlm_overlay_regression_v2.py \
-    --model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
-    --base_dataset_path "/workspace/guided_diffusion_policy/externals/robocasa/datasets/v0.1/single_stage/kitchen_pnp/PnPSinkToCounter/2024-04-26_2,/workspace/guided_diffusion_policy/externals/robocasa/datasets/v0.1/single_stage/kitchen_pnp/PnPCounterToSink/2024-04-25,/workspace/guided_diffusion_policy/externals/robocasa/datasets/v0.1/single_stage/kitchen_coffee/CoffeeServeMug/2024-05-01,/workspace/guided_diffusion_policy/externals/robocasa/datasets/v0.1/single_stage/kitchen_pnp/PnPStoveToCounter/2024-05-01,/workspace/guided_diffusion_policy/externals/robocasa/datasets/v0.1/single_stage/kitchen_pnp/PnPCounterToStove/2024-04-26,/workspace/guided_diffusion_policy/externals/robocasa/datasets/v0.1/single_stage/kitchen_pnp/PnPCabToCounter/2024-04-24,/workspace/guided_diffusion_policy/externals/robocasa/datasets/v0.1/single_stage/kitchen_pnp/PnPCounterToCab/2024-04-24,/workspace/guided_diffusion_policy/externals/robocasa/datasets/v0.1/single_stage/kitchen_pnp/PnPMicrowaveToCounter/2024-04-26,/workspace/guided_diffusion_policy/externals/robocasa/datasets/v0.1/single_stage/kitchen_pnp/PnPCounterToMicrowave/2024-04-27,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToStove,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPStoveToCounter,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToMicrowave,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPMicrowaveToCounter,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToSink,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPSinkToCounter,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCoffeeServeMug,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCabToCounter,/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToCab" \
-    --output_dir "outputs/feb5/PnPAll_$(date +%Y%m%d_%H%M%S)" \
-    --eval_strategy steps \
-    --logging_steps 500 \
-    --eval_steps 500 \
-    --save_steps 500 \
-    --gradient_accumulation_steps 1 \
-    --num_train_epochs 500 \
-    --learning_rate 1e-5 \
-    --per_device_train_batch_size 8 \
-    --per_device_eval_batch_size 8 \
-    --report_to wandb \
-    --split train \
-    --compare_interval 4,8,12,16 \
-    --upweight_robocasa 10
-
-CUDA_VISIBLE_DEVICES=0 accelerate launch --num_processes=1 --gpu_ids=0 \
-    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/scripts/myscripts/sft_vlm_overlay_regression_v2.py \
-    --model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
-    --base_dataset_path "/workspace/guided_diffusion_policy/externals/robocasa/datasets/v0.1/single_stage/kitchen_coffee/CoffeeServeMug/2024-05-01" \
-    --output_dir "outputs/test_$(date +%Y%m%d_%H%M%S)" \
-    --eval_strategy steps \
-    --logging_steps 500 \
-    --eval_steps 500 \
-    --save_steps 500 \
-    --gradient_accumulation_steps 1 \
-    --num_train_epochs 500 \
-    --learning_rate 1e-5 \
-    --per_device_train_batch_size 8 \
-    --per_device_eval_batch_size 8 \
-    --report_to wandb \
-    --split train \
-    --compare_interval 4,8,12,16 \
+    --base_dataset_path "realworld_dataset/PutKiwiInCenterOfTable-ObjectCentricDistributionShift-real" \
+    --output_dir "outputs/test_realworld2" \
     --just_visualize true
+
+For actual training (multi-GPU):
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --num_processes=8 \
+    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
+    examples/scripts/myscripts/sft_vlm_overlay_regression_realworld_data.py \
+    --model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
+    --base_dataset_path "realworld_dataset/PutKiwiInCenterOfTable-ObjectCentricDistributionShift-real" \
+    --output_dir "outputs/PutKiwiInCenterOfTable_ObjectCentricDistributionShift_$(date +%Y%m%d_%H%M%S)" \
+    --include_successes true \
+    --include_failures true \
+    --eval_strategy steps \
+    --logging_steps 500 \
+    --eval_steps 500 \
+    --save_steps 500 \
+    --gradient_accumulation_steps 1 \
+    --num_train_epochs 500 \
+    --learning_rate 1e-5 \
+    --per_device_train_batch_size 8 \
+    --per_device_eval_batch_size 8 \
+    --report_to wandb \
+    --split train
+
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --num_processes=8 \
+    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
+    examples/scripts/myscripts/sft_vlm_overlay_regression_realworld_data.py \
+    --model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
+    --base_dataset_path "realworld_dataset/BimanualBikeRotorInstall-Nominal-real,realworld_dataset/BimanualClearKitchenCounter-Nominal-real,realworld_dataset/BimanualSetUpBreakfastTable-Nominal-real,realworld_dataset/CleanLitterBox-Nominal-real,realworld_dataset/CutAppleIntoSlices-Nominal-real,realworld_dataset/PushCoasterToMug-Nominal-real,realworld_dataset/PushCoasterToMug-ObjectCentricDistributionShift-real,realworld_dataset/PutKiwiInCenterOfTable-ObjectCentricDistributionShift-real,realworld_dataset/PutKiwiInCenterOfTable-StationDistributionShift-real,realworld_dataset/PutKiwiInCenterOfTableSeenTasks_backfill-salem--video,realworld_dataset/TurnMugRightsideUp-Nominal-real,realworld_dataset/TurnMugRightsideUp-ObjectCentricDistributionShift-real,realworld_dataset/TurnMugRightsideUp-StationDistributionShift-real" \
+    --output_dir "outputs/realworld_all_$(date +%Y%m%d_%H%M%S)" \
+    --include_successes true \
+    --include_failures true \
+    --eval_strategy steps \
+    --logging_steps 500 \
+    --eval_steps 500 \
+    --save_steps 500 \
+    --gradient_accumulation_steps 1 \
+    --num_train_epochs 500 \
+    --learning_rate 1e-5 \
+    --per_device_train_batch_size 8 \
+    --per_device_eval_batch_size 8 \
+    --report_to wandb \
+    --split train
 
 """
 
@@ -138,7 +126,6 @@ from trl import (
 from video_frame_utils import create_side_by_side, extract_frame, get_frame_source, find_job_dirs, read_s3_json, s3, parse_s3_uri
 try:
     from trl import ScriptArguments
-
 except ImportError:
     print('COULD NOT IMPORT SCRIPT ARGUMENTS')
     pass  # Not needed for eval, only for training
@@ -147,7 +134,6 @@ try:
 except ImportError:
     print('COULD NOT IMPORT DataCollatorForVisionLanguageModeling')
     DataCollatorForVisionLanguageModeling = object  # dummy base class for eval
-
 # Set random seed for reproducibility
 random.seed(42)
 
@@ -166,6 +152,7 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 TASK_TOKENS = {
+    # Existing simulation tasks
     "PnPCounterToCab": "[COUNTER_TO_CAB]",
     "PnPCabToCounter": "[CAB_TO_COUNTER]",
     "PnPCounterToMicrowave": "[COUNTER_TO_MICROWAVE]",
@@ -178,14 +165,6 @@ TASK_TOKENS = {
     "CoffeeServeMug": "[COFFEE_SERVE_MUG]",
     "PnPCloseDrawer": "[CLOSE_DRAWER]",
     "CoffeeSetupMug": "[COFFEE_SETUP_MUG]",
-    "CoffeePressButton": "[COFFEE_PRESS_BUTTON]",
-    "CloseDrawer": "[CLOSE_DRAWER]",
-    "OpenDrawer": "[OPEN_DRAWER]",
-    "CloseSingleDoor": "[CLOSE_SINGLE_DOOR]",
-    "CloseDoubleDoor": "[CLOSE_DOUBLE_DOOR]",
-    "OpenDoubleDoor": "[OPEN_DOUBLE_DOOR]",
-    "OpenSingleDoor": "[OPEN_SINGLE_DOOR]",
-    "TurnSinkSpout": "[TURN_SINK_SPOUT]",
     # Realworld dataset tasks
     "PutKiwiInCenterOfTable": "[PUT_KIWI_IN_CENTER_OF_TABLE]",
     "PushCoasterToMug": "[PUSH_COASTER_TO_MUG]",
@@ -319,6 +298,396 @@ def match_failures_to_successes(success_data, unfiltered_failure_data):
             failure_data.append(fd)
 
     return failure_data
+
+
+# ============================================================================
+# Realworld Dataset Loading Functions
+# ============================================================================
+
+def is_realworld_format(task_path):
+    """
+    Check if task_path uses realworld dataset format (episode folders with models/).
+
+    Returns True if the path contains episode_* subdirectories with models/ inside.
+    """
+    if task_path.startswith("s3://"):
+        return False  # S3 paths use the old format
+
+    task_dir = Path(task_path)
+    if not task_dir.is_dir():
+        return False
+
+    # Look for episode_* directories (exclude .mp4 files)
+    episode_dirs = [p for p in task_dir.glob("episode_*") if p.is_dir()]
+    if not episode_dirs:
+        return False
+
+    # Check if at least one has models/ subdirectory
+    for ep_dir in episode_dirs[:3]:  # Check first 3
+        if (ep_dir / "models").is_dir():
+            return True
+
+    return False
+
+
+def load_realworld_trajectories(task_path):
+    """
+    Load trajectories from realworld_dataset format.
+
+    The realworld format has:
+    - Task folders (e.g., PutKiwiInCenterOfTable-ObjectCentricDistributionShift-real/)
+    - Episode folders (episode_0/, episode_1/, etc.)
+    - Models folders inside each episode (success_left_video/, failure_middle_video/, etc.)
+    - Frames inside each model folder (frames/frame_000001.png, etc.)
+
+    Returns:
+        List of dicts with:
+        - frames_dir: path to frames/ folder
+        - num_frames: total frame count
+        - sf: "success" or "fail"
+        - episode_id: episode identifier (e.g., "episode_0")
+        - model_name: model folder name (e.g., "success_left_video")
+        - task_name: extracted from task_path
+    """
+    task_dir = Path(task_path)
+    task_name = task_dir.name  # e.g., "PutKiwiInCenterOfTable-ObjectCentricDistributionShift-real"
+
+    trajectories = []
+
+    # Find all episode directories (exclude .mp4 files)
+    episode_dirs = sorted([p for p in task_dir.glob("episode_*") if p.is_dir()])
+    logger.info(f"Found {len(episode_dirs)} episode directories in {task_path}")
+
+    for ep_dir in episode_dirs:
+        if not ep_dir.is_dir():
+            continue
+
+        episode_id = ep_dir.name  # e.g., "episode_0"
+        models_dir = ep_dir / "models"
+
+        if not models_dir.is_dir():
+            logger.warning(f"No models/ directory in {ep_dir}, skipping...")
+            continue
+
+        # Scan model subdirectories
+        for model_dir in sorted(models_dir.iterdir()):
+            if not model_dir.is_dir():
+                continue
+
+            model_name = model_dir.name  # e.g., "success_left_video" or "failure_middle_video"
+            frames_dir = model_dir / "frames"
+
+            if not frames_dir.is_dir():
+                logger.warning(f"No frames/ directory in {model_dir}, skipping...")
+                continue
+
+            # Detect success/failure from folder name
+            if model_name.startswith("success"):
+                sf = "success"
+            elif model_name.startswith("failure"):
+                sf = "fail"
+            else:
+                logger.warning(f"Unknown model type for {model_name}, skipping...")
+                continue
+
+            # Count frames
+            frame_files = list(frames_dir.glob("frame_*.png"))
+            num_frames = len(frame_files)
+
+            if num_frames == 0:
+                logger.warning(f"No frames found in {frames_dir}, skipping...")
+                continue
+
+            trajectories.append({
+                "frames_dir": str(frames_dir),
+                "num_frames": num_frames,
+                "sf": sf,
+                "episode_id": episode_id,
+                "model_name": model_name,
+                "task_name": task_name,
+            })
+
+    logger.info(f"Loaded {len(trajectories)} trajectories from {task_path}")
+    return trajectories
+
+
+def match_realworld_failures_to_successes(trajectories):
+    """
+    Match failure trajectories with success trajectories from the SAME episode.
+
+    For each failure, finds a success trajectory from the same episode.
+
+    Returns:
+        List of failure dicts with added fields:
+        - success_frames_dir: path to the matched success frames
+        - success_num_frames: number of frames in the matched success trajectory
+    """
+    # Group by episode
+    by_episode = defaultdict(lambda: {"success": [], "fail": []})
+    for traj in trajectories:
+        by_episode[traj["episode_id"]][traj["sf"]].append(traj)
+
+    matched_failures = []
+
+    for episode_id, groups in by_episode.items():
+        successes = groups["success"]
+        failures = groups["fail"]
+
+        if not successes:
+            logger.warning(f"No success trajectories in {episode_id}, skipping failures...")
+            continue
+
+        if not failures:
+            continue
+
+        # Match each failure with the first success in same episode
+        for fd in failures:
+            matched_success = successes[0]  # Use first success as reference
+            fd_copy = fd.copy()
+            fd_copy["success_frames_dir"] = matched_success["frames_dir"]
+            fd_copy["success_num_frames"] = matched_success["num_frames"]
+            matched_failures.append(fd_copy)
+
+    logger.info(f"Matched {len(matched_failures)} failures to successes")
+    return matched_failures
+
+
+def compute_realworld_failure_filter_stats(trajectories, local_rank, world_size):
+    """
+    Compute per-frame mean pixel difference stats between success trajectory pairs.
+
+    For realworld format, compares success trajectories within the same episode
+    to establish baseline variation between successful runs.
+
+    Returns:
+        success_mean_diffs_at_idx: {episode_id: {frame_idx: [mean_diff_values]}}
+    """
+    # Group successes by episode
+    success_by_episode = defaultdict(list)
+    for traj in trajectories:
+        if traj["sf"] == "success":
+            success_by_episode[traj["episode_id"]].append(traj)
+
+    success_mean_diffs_at_idx = {}
+    all_episodes = sorted(list(success_by_episode.keys()))
+    my_episodes = all_episodes[local_rank::world_size]
+
+    for episode_id in tqdm(my_episodes, desc=f"Rank {local_rank} computing realworld stats"):
+        successes = success_by_episode[episode_id]
+        if len(successes) < 2:
+            # Need at least 2 success trajectories to compare
+            continue
+
+        success_mean_diffs_at_idx[episode_id] = {}
+
+        # Compare first two success trajectories
+        traj1 = successes[0]
+        traj2 = successes[1]
+        max_idx = min(traj1["num_frames"], traj2["num_frames"])
+
+        for idx in range(1, max_idx + 1):  # frame indices are 1-based in PNG files
+            try:
+                img1 = extract_frame(traj1["frames_dir"], idx)
+                img2 = extract_frame(traj2["frames_dir"], idx)
+                arr1 = np.array(img1)
+                arr2 = np.array(img2)
+                mean_diff = np.mean(np.abs(arr1.astype(float) - arr2.astype(float)))
+
+                if idx not in success_mean_diffs_at_idx[episode_id]:
+                    success_mean_diffs_at_idx[episode_id][idx] = []
+                success_mean_diffs_at_idx[episode_id][idx].append(mean_diff)
+            except Exception as e:
+                logger.warning(f"Failed to compare frames at idx {idx}: {e}")
+                continue
+
+    # Gather stats from all ranks
+    if world_size > 1:
+        import torch.distributed as dist
+        logger.info(f"Rank {local_rank}: Gathering realworld stats from all ranks...")
+        all_stats = [None for _ in range(world_size)]
+        dist.all_gather_object(all_stats, success_mean_diffs_at_idx)
+        success_mean_diffs_at_idx = {}
+        for rank_stats in all_stats:
+            success_mean_diffs_at_idx.update(rank_stats)
+
+    return success_mean_diffs_at_idx
+
+
+def build_realworld_frame_pairs(
+    success_data,
+    failure_data,
+    compare_intervals,
+    train_sample_interval,
+    success_mean_diffs_at_idx,
+    task_name,
+    local_rank,
+    world_size,
+    include_successes=True,
+    include_failures=True,
+):
+    """
+    Generate frame pair metadata for realworld dataset format.
+
+    SUCCESS PAIRS (success-success):
+    - For each success trajectory, compare frame i vs frame i+interval
+    - Label: right shows more progress (+32 or -32 with swapping)
+
+    FAILURE PAIRS (success-failure):
+    - For matched success-failure pairs from same episode
+    - Compare frame i from failure vs frame i from success
+    - Use MSE to find when failure diverges
+    - Label: success shows more progress
+
+    Returns list of dicts ready for HF Dataset.
+    """
+    combined_data = []
+
+    # Find task token
+    task_token = None
+    for task_key, token in TASK_TOKENS.items():
+        if task_key in task_name:
+            task_token = token
+            break
+    if task_token is None:
+        # Use task name as fallback
+        task_token = f"[{task_name.split('-')[0].upper()}]"
+        logger.warning(f"No task token found for {task_name}, using fallback: {task_token}")
+
+    user_prompt = USER_PROMPT_TEMPLATE.format(task_token=task_token)
+
+    # Split data across ranks
+    success_samples = success_data[local_rank::world_size] if include_successes else []
+    failure_samples = failure_data[local_rank::world_size] if include_failures else []
+
+    logger.info(f"Rank {local_rank}: Processing {len(success_samples)} success + {len(failure_samples)} failure trajectories")
+
+    # === SUCCESS PAIRS: compare frames at different intervals ===
+    for traj in tqdm(success_samples, desc=f"Rank {local_rank} building success pairs"):
+        frames_dir = traj["frames_dir"]
+        num_frames = traj["num_frames"]
+        episode_id = traj["episode_id"]
+        model_name = traj["model_name"]
+
+        for interval in compare_intervals:
+            max_idx1 = num_frames - interval
+            if max_idx1 < 1:
+                continue
+
+            offset = random.randint(0, train_sample_interval - 1)
+            for idx1 in range(1 + offset, max_idx1 + 1, train_sample_interval):
+                idx2 = idx1 + interval
+                correct_answer = 32  # Right (later frame) shows more progress
+
+                # 50% swap to avoid position bias
+                f1, f2 = idx1, idx2
+                v1, v2 = frames_dir, frames_dir
+                if random.random() < 0.5:
+                    f1, f2 = f2, f1
+                    correct_answer = -correct_answer
+
+                combined_data.append({
+                    "video_path_1": v1,
+                    "frame_idx_1": f1,
+                    "video_path_2": v2,
+                    "frame_idx_2": f2,
+                    "correct_answer": correct_answer,
+                    "compare_interval": interval,
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt},
+                        {"role": "assistant", "content": str(correct_answer)},
+                    ],
+                    "demo_id": episode_id,
+                    "demo_id_exact": f"{episode_id}_{model_name}",
+                    "demo_success": "success",
+                    "job_name": task_name,
+                    "task_token": task_token,
+                })
+
+    # === FAILURE vs SUCCESS PAIRS: same frame index, different trajectory ===
+    for traj in tqdm(failure_samples, desc=f"Rank {local_rank} building failure pairs"):
+        fail_frames_dir = traj["frames_dir"]
+        fail_num_frames = traj["num_frames"]
+        success_frames_dir = traj["success_frames_dir"]
+        success_num_frames = traj["success_num_frames"]
+        episode_id = traj["episode_id"]
+        model_name = traj["model_name"]
+
+        max_idx = min(fail_num_frames, success_num_frames)
+        beginning_of_failure = None
+
+        offset = random.randint(0, train_sample_interval - 1)
+        for idx in range(1 + offset, max_idx + 1, train_sample_interval):
+            try:
+                fail_img = extract_frame(fail_frames_dir, idx)
+                succ_img = extract_frame(success_frames_dir, idx)
+                arr1 = np.array(fail_img)
+                arr2 = np.array(succ_img)
+                mean_diff = np.mean(np.abs(arr1.astype(float) - arr2.astype(float)))
+
+                # Filter: skip if frames are too similar (failure hasn't diverged yet)
+                should_skip = False
+                if episode_id in success_mean_diffs_at_idx:
+                    demo_stats = success_mean_diffs_at_idx[episode_id]
+                    if idx in demo_stats:
+                        stats = demo_stats[idx]
+                        if mean_diff <= np.mean(stats) + np.std(stats):
+                            should_skip = True
+
+                if should_skip:
+                    continue
+
+                if beginning_of_failure is None:
+                    beginning_of_failure = idx
+
+                # Skip first few frames after failure starts (transition period)
+                if idx <= beginning_of_failure + 4:
+                    continue
+
+            except Exception as e:
+                logger.warning(f"Failed to compare frames at idx {idx}: {e}")
+                continue
+
+            correct_answer = 32  # Success shows more progress
+
+            # 50% swap to avoid position bias
+            v1, f1 = fail_frames_dir, idx
+            v2, f2 = success_frames_dir, idx
+            if random.random() < 0.5:
+                v1, f1, v2, f2 = v2, f2, v1, f1
+                correct_answer = -correct_answer
+
+            combined_data.append({
+                "video_path_1": v1,
+                "frame_idx_1": f1,
+                "video_path_2": v2,
+                "frame_idx_2": f2,
+                "correct_answer": correct_answer,
+                "compare_interval": 0,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                    {"role": "assistant", "content": str(correct_answer)},
+                ],
+                "demo_id": episode_id,
+                "demo_id_exact": f"{episode_id}_{model_name}",
+                "demo_success": "failure",
+                "job_name": task_name,
+                "task_token": task_token,
+            })
+
+    # Gather data from all ranks
+    if world_size > 1:
+        import torch.distributed as dist
+        logger.info(f"Rank {local_rank}: Gathering {len(combined_data)} pairs from all ranks...")
+        all_data = [None for _ in range(world_size)]
+        dist.all_gather_object(all_data, combined_data)
+        combined_data = []
+        for rank_data in all_data:
+            combined_data.extend(rank_data)
+        logger.info(f"Rank {local_rank}: Total {len(combined_data)} pairs after gathering")
+
+    return combined_data
 
 
 def balance_by_demo_id(success_data, failure_data, max_per_demo):
@@ -483,6 +852,7 @@ def build_frame_pairs(
                         "video_path_2": v2,
                         "frame_idx_2": f2,
                         "correct_answer": correct_answer,
+                        "compare_interval": interval,
                         "messages": [
                             {"role": "system", "content": SYSTEM_PROMPT},
                             {"role": "user", "content": user_prompt},
@@ -553,6 +923,7 @@ def build_frame_pairs(
                     "video_path_2": v2,
                     "frame_idx_2": f2,
                     "correct_answer": correct_answer,
+                    "compare_interval": 0,
                     "messages": [
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": user_prompt},
@@ -704,8 +1075,10 @@ def visualize_dataset(combined_data, output_dir, split_name="train", num_example
         answer = item.get("correct_answer", "?")
         demo_type = item.get("demo_success", "?")
         task = item.get("task_token", "?")
+        interval = item.get("compare_interval", "?")
+        interval_str = f"int={interval}" if interval else "fail-pair"
         title_color = "#2ecc71" if answer > 0 else "#e74c3c" if answer < 0 else "#333333"
-        ax.set_title(f"Answer: {answer} | {demo_type} | {task}", fontsize=9, color=title_color, fontweight="bold")
+        ax.set_title(f"Answer: {answer} | {demo_type} | {interval_str} | {task}", fontsize=9, color=title_color, fontweight="bold")
 
     plt.suptitle(f"Sample Overlays ({split_name})", fontsize=14, fontweight="bold", y=1.02)
     plt.tight_layout()
@@ -748,9 +1121,11 @@ def visualize_dataset(combined_data, output_dir, split_name="train", num_example
         answer = item.get("correct_answer", "?")
         demo_type = item.get("demo_success", "?")
         task = item.get("task_token", "?")
+        interval = item.get("compare_interval", "?")
+        interval_str = f"int={interval}" if interval else "fail-pair"
         title_color = "#2ecc71" if answer > 0 else "#e74c3c" if answer < 0 else "#333333"
         ax3.set_title(
-            f"Overlay | Answer: {answer} | {demo_type} | {task}",
+            f"Overlay | Answer: {answer} | {demo_type} | {interval_str} | {task}",
             fontsize=10, color=title_color, fontweight="bold",
         )
 
@@ -1020,7 +1395,7 @@ if __name__ == "__main__":
         include_successes: bool = True
         include_failures: bool = True
         train_sample_interval: int = 5
-        compare_interval: str = "4,8,12,16"
+        compare_interval: str = "32,36"
         train_val_split_index: int = 5
         base_dataset_path: str = ""
         max_exact_per_demo: int = 50
@@ -1088,148 +1463,228 @@ if __name__ == "__main__":
         logger.info("=" * 60)
 
         # ============================
-        # Load trajectories for this task
+        # Detect dataset format and process accordingly
         # ============================
-        job_dirs = find_job_dirs(task_path)
-        if split == "val":
-            job_dirs = job_dirs[-overlay_args.train_val_split_index :]
-        elif split == "train":
-            if 'robocasa/datasets' in task_path or overlay_args.train_val_split_index == 0:
-                job_dirs = job_dirs[:]
+        if is_realworld_format(task_path):
+            # ============================
+            # REALWORLD DATASET FORMAT
+            # ============================
+            logger.info(f"Detected REALWORLD dataset format for {task_path}")
+
+            # Load trajectories from episode/models/frames structure
+            trajectories = load_realworld_trajectories(task_path)
+
+            if not trajectories:
+                logger.warning(f"No trajectories found in {task_path}, skipping...")
+                continue
+
+            # Separate success and failure trajectories
+            success_data = [t for t in trajectories if t["sf"] == "success"]
+            failure_trajectories = [t for t in trajectories if t["sf"] == "fail"]
+
+            logger.info(f"Found {len(success_data)} success + {len(failure_trajectories)} failure trajectories")
+
+            # Match failures to successes from same episode
+            if overlay_args.include_failures and failure_trajectories:
+                failure_data = match_realworld_failures_to_successes(trajectories)
+                logger.info(f"Matched {len(failure_data)} failures to success trajectories")
             else:
-                job_dirs = job_dirs[: -overlay_args.train_val_split_index]
-        else:
-            job_dirs = job_dirs[: int(split)]
+                failure_data = []
+                logger.info("Skipping failure data (--include_failures is False or no failures)")
 
-        logger.info(f"Found {len(job_dirs)} job directories for {split} split in {task_path}")
+            # Debug mode: subsample
+            if overlay_args.debug_samples > -1:
+                success_data = random.sample(success_data, min(len(success_data), overlay_args.debug_samples))
+                failure_data = random.sample(failure_data, min(len(failure_data), overlay_args.debug_samples))
 
-        if len(job_dirs) == 0:
-            logger.warning(f"No job directories found in {task_path}, skipping...")
-            continue
+            # Compute failure filter stats for realworld format
+            if overlay_args.include_failures and failure_data:
+                stats_cache_file = Path(task_path) / "realworld_failure_filter_stats.json"
+                success_mean_diffs_at_idx = None
 
-        success_data, unfiltered_failure_data = load_trajectories(job_dirs)
-        logger.info(f"Loaded {len(success_data)} success + {len(unfiltered_failure_data)} failure trajectories")
-
-        if overlay_args.include_failures:
-            failure_data = match_failures_to_successes(success_data, unfiltered_failure_data)
-            logger.info(f"Matched {len(failure_data)} failures to success trajectories")
-        else:
-            failure_data = []
-            logger.info("Skipping failure data (--include_failures is False)")
-
-        # ============================
-        # Balanced sampling for this task
-        # ============================
-        if overlay_args.include_successes and overlay_args.include_failures and success_data and failure_data:
-            success_data, failure_data, success_by_demo, failure_by_demo = balance_by_demo_id(
-                success_data, failure_data, overlay_args.max_exact_per_demo
-            )
-        else:
-            # No cross-type balancing, but still cap per demo
-            success_by_demo = defaultdict(list)
-            for sd in success_data:
-                success_by_demo[sd["demo_id"]].append(sd)
-            failure_by_demo = defaultdict(list)
-            for fd in failure_data:
-                failure_by_demo[fd["demo_id"]].append(fd)
-
-            rng = random.Random(42)
-            capped_success = []
-            for demo_id in sorted(success_by_demo.keys()):
-                items = success_by_demo[demo_id]
-                if len(items) > overlay_args.max_exact_per_demo:
-                    items = rng.sample(items, overlay_args.max_exact_per_demo)
-                    success_by_demo[demo_id] = items
-                capped_success.extend(items)
-            capped_failure = []
-            for demo_id in sorted(failure_by_demo.keys()):
-                items = failure_by_demo[demo_id]
-                if len(items) > overlay_args.max_exact_per_demo:
-                    items = rng.sample(items, overlay_args.max_exact_per_demo)
-                    failure_by_demo[demo_id] = items
-                capped_failure.extend(items)
-
-            logger.info(f"After per-demo cap ({overlay_args.max_exact_per_demo}): "
-                        f"{len(success_data)} -> {len(capped_success)} success, "
-                        f"{len(failure_data)} -> {len(capped_failure)} failure")
-            success_data = capped_success
-            failure_data = capped_failure
-        # Debug mode: subsample
-        if overlay_args.debug_samples > -1:
-            success_data = random.sample(success_data, min(len(success_data), overlay_args.debug_samples))
-            failure_data = random.sample(failure_data, min(len(failure_data), overlay_args.debug_samples))
-
-        # ============================
-        # Compute failure filter stats for this task
-        # ============================
-        if overlay_args.include_failures and failure_data:
-            success_mean_diffs_at_idx = None
-            if task_path.startswith("s3://"):
-                stats_s3_uri = task_path.rstrip("/") + "/failure_filter_stats.json"
-                try:
-                    cached = read_s3_json(stats_s3_uri)
-                    success_mean_diffs_at_idx = cached["success_mean_diffs_at_idx"]
-                    logger.info(f"Loaded cached failure filter stats from {stats_s3_uri}")
-                except Exception:
-                    logger.info(f"No cached stats found at {stats_s3_uri}")
-            else:
-                stats_cache_file = Path(task_path) / "failure_filter_stats.json"
                 if stats_cache_file.exists():
-                    logger.info(f"Loading cached failure filter stats from {stats_cache_file}")
+                    logger.info(f"Loading cached realworld failure filter stats from {stats_cache_file}")
                     with open(stats_cache_file, "r") as f:
                         cached = json.load(f)
-                        success_mean_diffs_at_idx = cached["success_mean_diffs_at_idx"]
+                        success_mean_diffs_at_idx = cached.get("success_mean_diffs_at_idx", {})
 
-            if success_mean_diffs_at_idx is None:
-                logger.info("Computing failure filter stats...")
-                success_mean_diffs_at_idx = compute_failure_filter_stats(
-                    success_by_demo, failure_by_demo, local_rank, world_size
-                )
-                if local_rank == 0:
-                    if task_path.startswith("s3://"):
-                        stats_s3_uri = task_path.rstrip("/") + "/failure_filter_stats.json"
-                        body = json.dumps({"success_mean_diffs_at_idx": success_mean_diffs_at_idx})
-                        bucket, prefix = parse_s3_uri(stats_s3_uri)
-                        key = prefix.rstrip("/")
-                        s3.put_object(Bucket=bucket, Key=key, Body=body.encode())
-                        logger.info(f"Saved failure filter stats to {stats_s3_uri}")
-                    else:
-                        stats_cache_file = Path(task_path) / "failure_filter_stats.json"
+                if success_mean_diffs_at_idx is None:
+                    logger.info("Computing realworld failure filter stats...")
+                    success_mean_diffs_at_idx = compute_realworld_failure_filter_stats(
+                        trajectories, local_rank, world_size
+                    )
+                    if local_rank == 0:
                         with open(stats_cache_file, "w") as f:
                             json.dump({"success_mean_diffs_at_idx": success_mean_diffs_at_idx}, f)
-                        logger.info(f"Saved failure filter stats to {stats_cache_file}")
-        else:
-            success_mean_diffs_at_idx = {}
-            logger.info("Skipping failure filter stats (no failure data)")
+                        logger.info(f"Saved realworld failure filter stats to {stats_cache_file}")
+            else:
+                success_mean_diffs_at_idx = {}
+                logger.info("Skipping failure filter stats (no failure data)")
 
-        # ============================
-        # Build frame pair metadata for this task
-        # ============================
-        job_name = Path(job_dirs[0]).name if job_dirs else ""
-        build_success = success_data if overlay_args.include_successes else []
-        build_failure = failure_data if overlay_args.include_failures else []
-        task_combined_data = build_frame_pairs(
-            success_data=build_success,
-            failure_data=build_failure,
-            compare_intervals=compare_intervals,
-            train_sample_interval=overlay_args.train_sample_interval,
-            success_mean_diffs_at_idx=success_mean_diffs_at_idx,
-            job_name=job_name,
-            local_rank=local_rank,
-            world_size=world_size,
-            task_path=task_path,
-        )
-        logger.info(f"Built {len(task_combined_data)} frame pairs for task: {job_name}")
-        # ============================
-        # Upweight robocasa samples by tripling them
-        # ============================
-        if "robocasa/datasets" in task_path:
-            logger.info(f"Upweighting robocasa samples: {len(task_combined_data)} -> {len(task_combined_data) * overlay_args.upweight_robocasa}")
-            # Add 2 more copies (original + 2 copies = 3x)
-            combined_data.extend(task_combined_data * overlay_args.upweight_robocasa)
-            logger.info(f"Total samples after upweighting: {len(combined_data)}")
-        else:
+            # Build frame pairs for realworld format
+            task_name = Path(task_path).name
+            task_combined_data = build_realworld_frame_pairs(
+                success_data=success_data if overlay_args.include_successes else [],
+                failure_data=failure_data if overlay_args.include_failures else [],
+                compare_intervals=compare_intervals,
+                train_sample_interval=overlay_args.train_sample_interval,
+                success_mean_diffs_at_idx=success_mean_diffs_at_idx,
+                task_name=task_name,
+                local_rank=local_rank,
+                world_size=world_size,
+                include_successes=overlay_args.include_successes,
+                include_failures=overlay_args.include_failures,
+            )
+            logger.info(f"Built {len(task_combined_data)} frame pairs for realworld task: {task_name}")
             combined_data.extend(task_combined_data)
+
+        else:
+            # ============================
+            # ORIGINAL EVAL_LOG.JSON FORMAT
+            # ============================
+            logger.info(f"Using ORIGINAL dataset format for {task_path}")
+
+            # Load trajectories for this task
+            job_dirs = find_job_dirs(task_path)
+            if split == "val":
+                job_dirs = job_dirs[-overlay_args.train_val_split_index :]
+            elif split == "train":
+                if 'robocasa/datasets' in task_path or overlay_args.train_val_split_index == 0:
+                    job_dirs = job_dirs[:]
+                else:
+                    job_dirs = job_dirs[: -overlay_args.train_val_split_index]
+            else:
+                job_dirs = job_dirs[: int(split)]
+
+            logger.info(f"Found {len(job_dirs)} job directories for {split} split in {task_path}")
+
+            if len(job_dirs) == 0:
+                logger.warning(f"No job directories found in {task_path}, skipping...")
+                continue
+
+            success_data, unfiltered_failure_data = load_trajectories(job_dirs)
+            logger.info(f"Loaded {len(success_data)} success + {len(unfiltered_failure_data)} failure trajectories")
+
+            if overlay_args.include_failures:
+                failure_data = match_failures_to_successes(success_data, unfiltered_failure_data)
+                logger.info(f"Matched {len(failure_data)} failures to success trajectories")
+            else:
+                failure_data = []
+                logger.info("Skipping failure data (--include_failures is False)")
+
+            # ============================
+            # Balanced sampling for this task
+            # ============================
+            if overlay_args.include_successes and overlay_args.include_failures and success_data and failure_data:
+                success_data, failure_data, success_by_demo, failure_by_demo = balance_by_demo_id(
+                    success_data, failure_data, overlay_args.max_exact_per_demo
+                )
+            else:
+                # No cross-type balancing, but still cap per demo
+                success_by_demo = defaultdict(list)
+                for sd in success_data:
+                    success_by_demo[sd["demo_id"]].append(sd)
+                failure_by_demo = defaultdict(list)
+                for fd in failure_data:
+                    failure_by_demo[fd["demo_id"]].append(fd)
+
+                rng = random.Random(42)
+                capped_success = []
+                for demo_id in sorted(success_by_demo.keys()):
+                    items = success_by_demo[demo_id]
+                    if len(items) > overlay_args.max_exact_per_demo:
+                        items = rng.sample(items, overlay_args.max_exact_per_demo)
+                        success_by_demo[demo_id] = items
+                    capped_success.extend(items)
+                capped_failure = []
+                for demo_id in sorted(failure_by_demo.keys()):
+                    items = failure_by_demo[demo_id]
+                    if len(items) > overlay_args.max_exact_per_demo:
+                        items = rng.sample(items, overlay_args.max_exact_per_demo)
+                        failure_by_demo[demo_id] = items
+                    capped_failure.extend(items)
+
+                logger.info(f"After per-demo cap ({overlay_args.max_exact_per_demo}): "
+                            f"{len(success_data)} -> {len(capped_success)} success, "
+                            f"{len(failure_data)} -> {len(capped_failure)} failure")
+                success_data = capped_success
+                failure_data = capped_failure
+            # Debug mode: subsample
+            if overlay_args.debug_samples > -1:
+                success_data = random.sample(success_data, min(len(success_data), overlay_args.debug_samples))
+                failure_data = random.sample(failure_data, min(len(failure_data), overlay_args.debug_samples))
+
+            # ============================
+            # Compute failure filter stats for this task
+            # ============================
+            if overlay_args.include_failures and failure_data:
+                success_mean_diffs_at_idx = None
+                if task_path.startswith("s3://"):
+                    stats_s3_uri = task_path.rstrip("/") + "/failure_filter_stats.json"
+                    try:
+                        cached = read_s3_json(stats_s3_uri)
+                        success_mean_diffs_at_idx = cached["success_mean_diffs_at_idx"]
+                        logger.info(f"Loaded cached failure filter stats from {stats_s3_uri}")
+                    except Exception:
+                        logger.info(f"No cached stats found at {stats_s3_uri}")
+                else:
+                    stats_cache_file = Path(task_path) / "failure_filter_stats.json"
+                    if stats_cache_file.exists():
+                        logger.info(f"Loading cached failure filter stats from {stats_cache_file}")
+                        with open(stats_cache_file, "r") as f:
+                            cached = json.load(f)
+                            success_mean_diffs_at_idx = cached["success_mean_diffs_at_idx"]
+
+                if success_mean_diffs_at_idx is None:
+                    logger.info("Computing failure filter stats...")
+                    success_mean_diffs_at_idx = compute_failure_filter_stats(
+                        success_by_demo, failure_by_demo, local_rank, world_size
+                    )
+                    if local_rank == 0:
+                        if task_path.startswith("s3://"):
+                            stats_s3_uri = task_path.rstrip("/") + "/failure_filter_stats.json"
+                            body = json.dumps({"success_mean_diffs_at_idx": success_mean_diffs_at_idx})
+                            bucket, prefix = parse_s3_uri(stats_s3_uri)
+                            key = prefix.rstrip("/")
+                            s3.put_object(Bucket=bucket, Key=key, Body=body.encode())
+                            logger.info(f"Saved failure filter stats to {stats_s3_uri}")
+                        else:
+                            stats_cache_file = Path(task_path) / "failure_filter_stats.json"
+                            with open(stats_cache_file, "w") as f:
+                                json.dump({"success_mean_diffs_at_idx": success_mean_diffs_at_idx}, f)
+                            logger.info(f"Saved failure filter stats to {stats_cache_file}")
+            else:
+                success_mean_diffs_at_idx = {}
+                logger.info("Skipping failure filter stats (no failure data)")
+
+            # ============================
+            # Build frame pair metadata for this task
+            # ============================
+            job_name = Path(job_dirs[0]).name if job_dirs else ""
+            build_success = success_data if overlay_args.include_successes else []
+            build_failure = failure_data if overlay_args.include_failures else []
+            task_combined_data = build_frame_pairs(
+                success_data=build_success,
+                failure_data=build_failure,
+                compare_intervals=compare_intervals,
+                train_sample_interval=overlay_args.train_sample_interval,
+                success_mean_diffs_at_idx=success_mean_diffs_at_idx,
+                job_name=job_name,
+                local_rank=local_rank,
+                world_size=world_size,
+                task_path=task_path,
+            )
+            logger.info(f"Built {len(task_combined_data)} frame pairs for task: {job_name}")
+            # ============================
+            # Upweight robocasa samples by tripling them
+            # ============================
+            if "robocasa/datasets" in task_path:
+                logger.info(f"Upweighting robocasa samples: {len(task_combined_data)} -> {len(task_combined_data) * overlay_args.upweight_robocasa}")
+                # Add 2 more copies (original + 2 copies = 3x)
+                combined_data.extend(task_combined_data * overlay_args.upweight_robocasa)
+                logger.info(f"Total samples after upweighting: {len(combined_data)}")
+            else:
+                combined_data.extend(task_combined_data)
 
     logger.info(f"Total frame pairs across all tasks: {len(combined_data)}")
 
@@ -1299,28 +1754,31 @@ if __name__ == "__main__":
     if overlay_args.just_visualize:
         sys.exit(0)
 
-    if world_size > 1:
-        total = len(combined_data)
-        per_rank = total // world_size
-        start = local_rank * per_rank
-        end = start + per_rank if local_rank < world_size - 1 else total
-        combined_data = combined_data[start:end]
-        logger.info(f"Rank {local_rank}: Shard [{start}:{end}] = {len(combined_data)} pairs")
+    # ============================
+    # Episode-level train/eval split (BEFORE any per-rank sharding so all ranks agree)
+    # ============================
+    all_demo_ids = sorted(set(item["demo_id"] for item in combined_data))
+    rng = random.Random(42)
+    rng.shuffle(all_demo_ids)
+    n_eval_demos = max(1, int(len(all_demo_ids) * 0.1))  # ~10% of episodes for eval
+    eval_demo_ids = set(all_demo_ids[:n_eval_demos])
+    train_demo_ids = set(all_demo_ids[n_eval_demos:])
+    logger.info(f"Episode-level split: {len(train_demo_ids)} train episodes, {len(eval_demo_ids)} eval episodes")
+    logger.info(f"Eval episodes: {eval_demo_ids}")
 
-    # ============================
-    # Create HF Dataset (metadata only, no images)
-    # ============================
-    logger.info(f"Creating HuggingFace dataset from {len(combined_data)} samples...")
-    dataset = Dataset.from_list(combined_data)
+    train_data = [item for item in combined_data if item["demo_id"] in train_demo_ids]
+    eval_data = [item for item in combined_data if item["demo_id"] in eval_demo_ids]
+    logger.info(f"Train: {len(train_data)} samples, Eval: {len(eval_data)} samples")
     del combined_data
     gc.collect()
 
-    # Train/test split
-    test_size = max(2, len(dataset) // 20)
-    dataset = dataset.train_test_split(test_size=test_size, seed=42, shuffle=True)
-    train_dataset = dataset["train"]
-    eval_dataset = dataset["test"] if training_args.eval_strategy != "no" else None
-    logger.info(f"Train: {len(train_dataset)}, Eval: {len(eval_dataset) if eval_dataset else 0}")
+    # ============================
+    # Create HF Datasets (Trainer handles per-rank sharding via DistributedSampler)
+    # ============================
+    train_dataset = Dataset.from_list(train_data)
+    eval_dataset = Dataset.from_list(eval_data) if training_args.eval_strategy != "no" and len(eval_data) > 0 else None
+    del train_data, eval_data
+    gc.collect()
 
     # Synchronize before model loading
     if world_size > 1:
@@ -1354,13 +1812,27 @@ if __name__ == "__main__":
         processor = AutoProcessor.from_pretrained(
             model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
         )
+        # ✅ Fix decoder-only padding
+        if hasattr(processor, "tokenizer") and processor.tokenizer is not None:
+            processor.tokenizer.padding_side = "left"
+            # many decoder-only models don't have a pad token
+            if processor.tokenizer.pad_token is None:
+                processor.tokenizer.pad_token = processor.tokenizer.eos_token
+        else:
+            logger.warning("Processor has no tokenizer; cannot set padding_side.")
+        # ✅ Keep model + tokenizer consistent
+        if hasattr(model, "config") and hasattr(processor, "tokenizer") and processor.tokenizer is not None:
+            if getattr(model.config, "pad_token_id", None) is None:
+                model.config.pad_token_id = processor.tokenizer.pad_token_id
+                
     except Exception as e:
         logger.warning(f"Failed to load AutoProcessor: {e}")
 
     logger.info(f"Model loaded in {time.time() - start_time:.2f}s")
     if hasattr(model, "num_parameters"):
         logger.info(f"Parameters: {model.num_parameters() / 1e9:.2f}B")
-
+    logger.info(f"tokenizer.padding_side = {processor.tokenizer.padding_side}")
+    logger.info(f"tokenizer.pad_token = {processor.tokenizer.pad_token} | pad_token_id = {processor.tokenizer.pad_token_id}")
     # ============================
     # Training
     # ============================
@@ -1370,6 +1842,7 @@ if __name__ == "__main__":
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         peft_config=get_peft_config(model_args),
+        processing_class=processor,  # ✅ IMPORTANT
     )
 
     # Replace the default collator with our video-aware collator

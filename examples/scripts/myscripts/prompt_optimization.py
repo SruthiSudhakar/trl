@@ -8,23 +8,26 @@ Usage:
 export GOOGLE_API_KEY="AIzaSyDz5juA63feTZpUReaD7KEIzNiNQVWekL0"
 # Single dataset
 CUDA_VISIBLE_DEVICES=0 python3 examples/scripts/myscripts/evaluate_vlm_overlay_regression_v2.py \
-    --model_name_or_path outputs/jan29/PnPAll_20260129_222205/checkpoint-8000 \
-    --base_dataset_path /workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/feb7_na_na_16_mg_place_PnPStoveToCounter_mg_fixed_224 \
+    --base_dataset_path /workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToStove \
     --split val \
     --compare_interval 4,8,12,16 \
-    --batch_size 10 \
-    --num_samples 10 \
+    --batch_size 300 \
+    --num_samples 299 \
     --train_val_split_index 5 \
     --visualize
-CUDA_VISIBLE_DEVICES=0 python3 /workspace/hf_trl/trl/examples/scripts/myscripts/evaluate_vlm_overlay_regression_v2.py \
-    --model_name_or_path /workspace/hf_trl/trl/examples/scripts/myscripts/evaluate_ROVER.py     --model_name_or_path /workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct \
-    --base_dataset_path /workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/feb7_na_na_16_mg_place_PnPSinkToCounter_mg_fixed_224 \
-    --split val \
-    --compare_interval 8,16 \
-    --batch_size 100 \
-    --num_samples 1000 \
+
+# Multiple datasets (CSV)
+CUDA_VISIBLE_DEVICES=7 python3 examples/scripts/myscripts/evaluate_vlm_overlay_regression_v2.py \
+    --user_prompt_path \
+    --base_dataset_path "/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToStove"
+    --split train \
+    --compare_interval 4,8,12,16 \
+    --batch_size 300 \
+    --num_samples 299 \
     --train_val_split_index 5 \
     --visualize
+
+    --base_dataset_path "/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToStove","/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPStoveToCounter","/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToMicrowave","/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPMicrowaveToCounter","/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToSink","/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPSinkToCounter","/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCoffeeServeMug","/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCabToCounter","/workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToCab" \
 
 """
 
@@ -56,9 +59,26 @@ from sft_vlm_overlay_regression_v2 import (
     match_failures_to_successes,
     balance_by_demo_id,
     build_frame_pairs,
-    compute_failure_filter_stats
 )
-
+USER_PROMPT_TEMPLATE = """
+You are an expert roboticist tasked to predict task completion
+percentages for frames of a robot for the task of {task_description}.
+The task completion percentages are between 0 and 100, where 100
+corresponds to full task completion. We provide several examples of
+the robot performing the task at various stages and their
+corresponding task completion percentages. Note that these frames are
+in random order, so please pay attention to the individual frames
+when reasoning about task completion percentage.
+Initial robot scene: [IMG]
+In the initial robot scene, the task completion percentage is 0.
+Now, for the task of {task_description}, output the task completion
+percentage for the following frames that are presented in random
+order. For each frame, format your response as follow: Frame {i}:
+Frame Description: {}, Task Completion Percentages:{}%
+Frame 1: [IMG]
+...
+Frame n: [IMG]
+"""
 
 # ============================================================================
 # Inference
@@ -170,17 +190,6 @@ def run_inference(model, processor, pairs, batch_size, device, max_new_tokens=64
 # Metrics & Visualization
 # ============================================================================
 
-def _get_interval_label(r):
-    """Classify a result as 'intra-N' (same video, N frames apart) or 'sf' (success-failure)."""
-    f1 = r.get("frame_idx_1")
-    f2 = r.get("frame_idx_2")
-    v1 = r.get("video_path_1")
-    v2 = r.get("video_path_2")
-    if v1 == v2 and isinstance(f1, int) and isinstance(f2, int):
-        return f"intra-{abs(f2 - f1)}"
-    return "sf"
-
-
 def compute_metrics(results, tolerance=3):
     valid = [r for r in results if r["prediction"] is not None]
     if not valid:
@@ -211,25 +220,6 @@ def compute_metrics(results, tolerance=3):
         metrics[f"{dtype}_count"] = len(subset)
         metrics[f"{dtype}_mae"] = float(np.mean(sub_abs))
         metrics[f"{dtype}_sign_accuracy"] = float(np.mean(sub_sign))
-
-    # Per interval breakdown
-    interval_groups = defaultdict(list)
-    for r in valid:
-        interval_groups[_get_interval_label(r)].append(r)
-
-    interval_metrics = {}
-    for label, group in sorted(interval_groups.items()):
-        g_sign = [r["sign_correct"] for r in group]
-        interval_metrics[label] = {
-            "count": len(group),
-            "sign_accuracy": float(np.mean(g_sign)),
-            "mae": float(np.mean([r["abs_error"] for r in group])),
-        }
-        metrics[f"interval_{label}_count"] = len(group)
-        metrics[f"interval_{label}_sign_accuracy"] = float(np.mean(g_sign))
-        metrics[f"interval_{label}_mae"] = float(np.mean([r["abs_error"] for r in group]))
-
-    metrics["interval_breakdown"] = interval_metrics
 
     return metrics
 
@@ -285,44 +275,7 @@ def visualize_results(results, output_dir, num_examples=8):
     plt.savefig(viz_dir / "error_distribution.png", dpi=150, bbox_inches="tight")
     plt.close()
 
-    # --- Plot 2: Sign accuracy breakdown by interval ---
-    interval_groups = defaultdict(list)
-    for r in valid:
-        interval_groups[_get_interval_label(r)].append(r)
-
-    if interval_groups:
-        def _sort_key(label):
-            if label == "sf":
-                return (0, 0)
-            return (1, int(label.split("-")[1]))
-
-        sorted_labels = sorted(interval_groups.keys(), key=_sort_key)
-        accuracies = [np.mean([r["sign_correct"] for r in interval_groups[l]]) * 100 for l in sorted_labels]
-        counts = [len(interval_groups[l]) for l in sorted_labels]
-
-        fig, ax = plt.subplots(figsize=(max(6, len(sorted_labels) * 1.5), 5))
-        bars = ax.bar(range(len(sorted_labels)), accuracies,
-                      color=["#e74c3c" if l == "sf" else "#3498db" for l in sorted_labels],
-                      edgecolor="black", alpha=0.85)
-
-        for i, (bar, acc, cnt) in enumerate(zip(bars, accuracies, counts)):
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1,
-                    f"{acc:.1f}%\n(n={cnt})", ha="center", va="bottom", fontsize=10, fontweight="bold")
-
-        ax.set_xticks(range(len(sorted_labels)))
-        ax.set_xticklabels(sorted_labels, fontsize=11)
-        ax.set_ylabel("Sign Accuracy (%)", fontsize=12)
-        ax.set_xlabel("Pair Type", fontsize=12)
-        ax.set_title("Sign Accuracy by Compare Interval", fontsize=14, fontweight="bold")
-        ax.set_ylim(0, min(max(accuracies) + 15, 105))
-        ax.axhline(y=50, color="gray", linestyle="--", alpha=0.5, label="Chance (50%)")
-        ax.legend()
-
-        plt.tight_layout()
-        plt.savefig(viz_dir / "accuracy_by_interval.png", dpi=150, bbox_inches="tight")
-        plt.close()
-
-    # --- Plot 3: Sample overlays with predictions ---
+    # --- Plot 2: Sample overlays with predictions ---
     worst = sorted(valid, key=lambda x: x["abs_error"], reverse=True)[:num_examples]
     best = sorted(valid, key=lambda x: x["abs_error"])[:num_examples]
 
@@ -376,7 +329,7 @@ def visualize_results(results, output_dir, num_examples=8):
 def parse_args():
     p = argparse.ArgumentParser(description="Test a trained VLM overlay regression v2 model on new dataset(s)")
 
-    p.add_argument("--model_name_or_path", type=str, required=True,
+    p.add_argument("--model_name_or_path", type=str, required=True, default="/workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct",
                    help="Path to trained checkpoint (full model or PEFT adapter)")
     p.add_argument("--base_model_name_or_path", type=str,
                    default="/workspace/cosmos-reason1/data/huggingface/transformers/Qwen2.5-VL-7B-Instruct",
@@ -592,16 +545,6 @@ def main():
                     cached = json.load(f)
                     success_mean_diffs_at_idx = cached["success_mean_diffs_at_idx"]
                 print("  Will apply same failure-frame filter as training to match train/eval distribution")
-            else:
-                print("No cached stats found, computing failure filter stats...")
-                success_mean_diffs_at_idx = compute_failure_filter_stats(
-                    success_by_demo, failure_by_demo, 0, 1
-                )
-                stats_cache_file = Path(base_dataset_path) / "failure_filter_stats.json"
-                with open(stats_cache_file, "w") as f:
-                    json.dump({"success_mean_diffs_at_idx": success_mean_diffs_at_idx}, f)
-                print(f"Saved failure filter stats to {stats_cache_file}")
-
         else:
             success_mean_diffs_at_idx = {}
             print("Skipping failure filter stats (no failure data)")
@@ -621,8 +564,7 @@ def main():
         print(f"Built {len(pairs)} evaluation pairs")
 
         if args.num_samples and args.num_samples < len(pairs):
-            subsample_rng = random.Random(args.seed)
-            pairs = subsample_rng.sample(pairs, args.num_samples)
+            pairs = random.sample(pairs, args.num_samples)
             print(f"Subsampled to {len(pairs)} pairs")
 
         # ---- Run inference ----
@@ -649,21 +591,12 @@ def main():
 
         # Per demo_type breakdown
         for key in sorted(metrics.keys()):
-            if key.endswith("_mae") and key != "mae" and not key.startswith("interval_"):
+            if key.endswith("_mae") and key != "mae":
                 dtype_name = key.replace("_mae", "")
                 count = metrics.get(f"{dtype_name}_count", 0)
                 mae = metrics[key]
                 sign_acc = metrics.get(f"{dtype_name}_sign_accuracy", float("nan"))
                 print(f"  {dtype_name}: n={count}, MAE={mae:.3f}, sign_acc={sign_acc:.3f}")
-
-        # Per-interval breakdown
-        interval_breakdown = metrics.get("interval_breakdown", {})
-        if interval_breakdown:
-            print("-" * 60)
-            print("Breakdown by compare interval:")
-            for label, stats in sorted(interval_breakdown.items(),
-                                        key=lambda x: (0, 0) if x[0] == "sf" else (1, int(x[0].split("-")[1]))):
-                print(f"  {label:>10s}: n={stats['count']:>4d}, sign_acc={stats['sign_accuracy']:.3f}, MAE={stats['mae']:.3f}")
 
         print("=" * 60)
 

@@ -8,20 +8,27 @@ python3 examples/scripts/myscripts/test_vlm_overlay.py \
     --output_dir outputs/test_results \
     --num_samples 20 \
     --split train
-
+    
 # Test a specific demo:
-python3 examples/scripts/myscripts/test_vlm_overlay.py \
-    --model_path outputs/jan29/PnPAll_20260129_222205/checkpoint-9500 \
-    --base_dataset_path /workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_mg_place_PnPStoveToCounter \
-    --output_dir outputs/test_results \
-    --demo_id 10_10_9h61nlai \
-    --split train
+CUDA_VISIBLE_DEVICES=7 python3 examples/scripts/myscripts/test_vlm_overlay.py \
+    --model_path outputs/feb3/PnPAll_balancedata_20260204_050919/checkpoint-7000 \
+    --base_dataset_path /workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/feb2_expertllm_mg_place_PnPMicrowaveToCounter_mg_fixed_224 \
+    --output_dir outputs/test_results_bd \
+    --demo_id 17_17_jtlsuh61 \
+    --split val
 
 # List available demos:
 python3 examples/scripts/myscripts/test_vlm_overlay.py \
     --base_dataset_path /workspace/guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_mg_place_PnPStoveToCounter \
     --list_demos \
     --split train
+
+# Run on local images from a folder (no ground truth):
+CUDA_VISIBLE_DEVICES=7 python3 examples/scripts/myscripts/test_vlm_overlay.py \
+    --model_path outputs/jan29/PnPAll_20260129_222205/checkpoint-9500 \
+    --image_folder test_images \
+    --task_token "[STOVE_TO_COUNTER]" \
+    --output_dir outputs/test_results_nogt
 """
 
 import argparse
@@ -30,10 +37,12 @@ import random
 import sys
 from collections import defaultdict
 from pathlib import Path
+import pdb
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from PIL import Image
 from tqdm import tqdm
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
@@ -359,16 +368,146 @@ def visualize_results(results, output_dir, demo_id=None):
     return output_dir
 
 
+def load_images_from_folder(image_folder):
+    """Load all images from a local folder, sorted by name."""
+    image_folder = Path(image_folder)
+    if not image_folder.exists():
+        raise ValueError(f"Image folder does not exist: {image_folder}")
+
+    image_extensions = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp"}
+    image_paths = sorted(
+        p for p in image_folder.iterdir()
+        if p.suffix.lower() in image_extensions
+    )
+
+    if len(image_paths) == 0:
+        raise ValueError(f"No images found in {image_folder}")
+
+    print(f"Found {len(image_paths)} images in {image_folder}")
+    return image_paths
+
+
+def visualize_results_no_gt(results, output_dir):
+    """Create visualization of results without ground truth."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    n = len(results)
+    n_cols = min(4, n)
+    n_rows = (n + n_cols - 1) // n_cols
+
+    fig = plt.figure(figsize=(6 * n_cols, 5 * n_rows))
+
+    for idx, r in enumerate(results):
+        ax = fig.add_subplot(n_rows, n_cols, idx + 1)
+
+        if r["image"] is not None:
+            ax.imshow(r["image"])
+        else:
+            ax.text(0.5, 0.5, "Failed to load", ha="center", va="center", transform=ax.transAxes)
+
+        ax.axis("off")
+
+        pred = r["prediction"]
+        raw = r["raw_output"]
+        filename = r["filename"]
+
+        if pred is not None:
+            if pred > 0:
+                title_color = "#2ecc71"  # Green - positive progress
+            elif pred < 0:
+                title_color = "#e74c3c"  # Red - negative progress
+            else:
+                title_color = "#f39c12"  # Orange - zero
+            pred_str = f"{pred:.0f}"
+        else:
+            title_color = "#95a5a6"  # Gray - failed to parse
+            pred_str = f"'{raw}'"
+
+        title = f"{filename}\nPred: {pred_str}"
+        ax.set_title(title, fontsize=9, color=title_color, fontweight="bold")
+
+    plt.suptitle("VLM Predictions (no ground truth)", fontsize=14, fontweight="bold")
+    plt.tight_layout()
+
+    output_path = output_dir / "test_results_local.png"
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Saved visualization to {output_path}")
+
+    # Save results JSON
+    results_json = []
+    for r in results:
+        results_json.append({
+            "filename": r["filename"],
+            "prediction": r["prediction"],
+            "raw_output": r["raw_output"],
+            "task_token": r["task_token"],
+        })
+
+    json_path = output_dir / "test_results_local.json"
+    with open(json_path, "w") as f:
+        json.dump({"results": results_json}, f, indent=2)
+    print(f"Saved detailed results to {json_path}")
+
+    return output_dir
+
+
 def main():
     parser = argparse.ArgumentParser(description="Test trained VLM on overlay images")
     parser.add_argument("--model_path", type=str, help="Path to trained model")
-    parser.add_argument("--base_dataset_path", type=str, required=True, help="Path to dataset")
+    parser.add_argument("--base_dataset_path", type=str, default=None, help="Path to dataset")
     parser.add_argument("--output_dir", type=str, default="outputs/test_results", help="Output directory")
     parser.add_argument("--num_samples", type=int, default=20, help="Number of samples to test")
     parser.add_argument("--split", type=str, default="val", choices=["train", "val"], help="Dataset split")
     parser.add_argument("--demo_id", type=str, default=None, help="Test specific demo (supports partial match)")
     parser.add_argument("--list_demos", action="store_true", help="List available demos and exit")
+    parser.add_argument("--image_folder", type=str, default=None, help="Path to folder of local images (no ground truth)")
+    parser.add_argument("--task_token", type=str, default=None, 
+                        help="Task token for local image mode (e.g. '[STOVE_TO_COUNTER]'). "
+                             "Available: " + ", ".join(TASK_TOKENS.values()))
     args = parser.parse_args()
+
+    # ── Local image folder mode (no ground truth) ──
+    if args.image_folder is not None:
+        if args.model_path is None:
+            parser.error("--model_path is required when using --image_folder")
+        if args.task_token is None:
+            parser.error("--task_token is required when using --image_folder. "
+                         f"Available: {', '.join(TASK_TOKENS.values())}")
+
+        image_paths = load_images_from_folder(args.image_folder)
+        model, processor = load_model_and_processor(args.model_path)
+
+        results = []
+        print(f"\nRunning inference on {len(image_paths)} local images...")
+
+        for img_path in tqdm(image_paths, desc="Testing"):
+            try:
+                image = Image.open(img_path).convert("RGB")
+            except Exception as e:
+                print(f"Failed to load {img_path}: {e}")
+                image = None
+
+            if image is not None:
+                raw_output, prediction = run_inference(model, processor, image, args.task_token)
+            else:
+                raw_output, prediction = "ERROR", None
+
+            results.append({
+                "image": image,
+                "filename": img_path.name,
+                "prediction": prediction,
+                "raw_output": raw_output,
+                "task_token": args.task_token,
+            })
+
+        visualize_results_no_gt(results, args.output_dir)
+        return
+
+    # ── Dataset mode (with ground truth) ──
+    if args.base_dataset_path is None:
+        parser.error("--base_dataset_path is required when not using --image_folder")
 
     # Build test samples (or list demos)
     samples = build_test_samples(
