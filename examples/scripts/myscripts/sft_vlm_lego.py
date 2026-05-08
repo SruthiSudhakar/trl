@@ -142,9 +142,13 @@ def build_pairs_for_demos(
             "video_path_1": v1, "frame_idx_1": f1,
             "video_path_2": v2, "frame_idx_2": f2,
             "correct_answer": ans,
-            "messages": [
+            # Prompt-completion format so completion_only_loss can mask
+            # the long constant prefix and only train on the answer tokens.
+            "prompt": [
                 {"role": "system", "content": LEGO_SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
+            ],
+            "completion": [
                 {"role": "assistant", "content": str(ans)},
             ],
             "demo_id": demo_id,
@@ -228,7 +232,23 @@ class TwoImageCollator(DataCollatorForVisionLanguageModeling):
             f1 = extract_frame(example["video_path_1"], example["frame_idx_1"])
             f2 = extract_frame(example["video_path_2"], example["frame_idx_2"])
             example["images"] = [f1, f2]
-        return super()._collate_prompt_completion(examples)
+        output = super()._collate_prompt_completion(examples)
+        # TRL's _collate_prompt_completion concatenates prompt+completion
+        # input_ids/attention_mask but leaves Qwen2.5-VL's per-token
+        # `mm_token_type_ids` at the prompt length, which crashes
+        # get_rope_index. Append zeros (text type) for the completion.
+        if "mm_token_type_ids" in output:
+            mm = output["mm_token_type_ids"]
+            seq_len = output["input_ids"].shape[1]
+            if mm.shape[1] < seq_len:
+                pad = torch.zeros(
+                    (mm.shape[0], seq_len - mm.shape[1]),
+                    dtype=mm.dtype, device=mm.device,
+                )
+                output["mm_token_type_ids"] = torch.cat([mm, pad], dim=1)
+            elif mm.shape[1] > seq_len:
+                output["mm_token_type_ids"] = mm[:, :seq_len]
+        return output
 
 
 class PairwiseSignAccuracyCallback(TrainerCallback):
@@ -403,6 +423,7 @@ class LegoArgs:
     eval_max_pairs: int = 200
     just_visualize: bool = False
     task_name: str = "PnPRedLegoToBrownBowl"
+    max_pixels: str = "640x360"  # WxH; processor budget per image
 
 
 if __name__ == "__main__":
@@ -413,6 +434,11 @@ if __name__ == "__main__":
     training_args.load_best_model_at_end = True
     training_args.metric_for_best_model = "eval_sign_acc_overall"
     training_args.greater_is_better = True
+    # Without this the loss averages over ~700 prompt+vision tokens vs ~3
+    # answer tokens, the prefix gets memorized, and the model collapses to a
+    # constant output at generation. Force loss only on the assistant
+    # completion tokens (requires prompt-completion dataset format).
+    training_args.completion_only_loss = True
 
     intervals = [int(x) for x in lego.compare_interval.split(",")]
     if lego.task_name not in TASK_TOKENS:
@@ -497,10 +523,11 @@ if __name__ == "__main__":
         device_map=get_kbit_device_map() if quant is not None else None,
         quantization_config=quant,
     )
+    mp_w, mp_h = (int(x) for x in lego.max_pixels.lower().split("x"))
     processor = AutoProcessor.from_pretrained(
         model_args.model_name_or_path,
         trust_remote_code=model_args.trust_remote_code,
-        max_pixels=640 * 360,
+        max_pixels=mp_w * mp_h,
     )
 
     trainer = SFTTrainer(
@@ -516,7 +543,9 @@ if __name__ == "__main__":
             processor=old.processor,
             max_length=old.max_length,
             completion_only_loss=old.completion_only_loss,
-            pad_to_multiple_of=old.pad_to_multiple_of,
+            # _collate_prompt_completion raises NotImplementedError if this
+            # is set; force-disable since we route through that path.
+            pad_to_multiple_of=None,
         )
     if eval_ds is not None:
         trainer.add_callback(PairwiseSignAccuracyCallback(
