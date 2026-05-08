@@ -32,12 +32,6 @@ Frames are decoded from MP4 videos on-the-fly during training (no pre-generated 
 
 Usage:
 
-aws s3 cp guided_diffusion_policy/data/outputs/jan19/2026.01.19/20.04.49_clip_allPnP/checkpoints/epoch_120_step_40897/na_na_16_expert_fulltask_PnPCounterToStove/failure_filter_stats.json \
-    s3://tri-ml-sandbox-16011-us-west-2-datasets/sruthi_trl_training/na_na_16_expert_fulltask_PnPCounterToStove/failure_filter_stats.json \
-    --exclude "*" \
-    --include "*/eval_log.json" \
-    --include "*.mp4" \
-    --recursive
 
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --num_processes=8 --gpu_ids=0,1,2,3,4,5,6,7 \
     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
@@ -175,6 +169,7 @@ TASK_TOKENS = {
     "PnPCounterToSink": "[COUNTER_TO_SINK]",
     "PnPSinkToCounter": "[SINK_TO_COUNTER]",
     "PnPCoffeeServeMug": "[COFFEE_SERVE_MUG]",
+    "PnPRedLegoToBrownBowl": "[PNP_RED_LEGO_TO_BROWN_BOWL]",
     "CoffeeServeMug": "[COFFEE_SERVE_MUG]",
     "PnPCloseDrawer": "[CLOSE_DRAWER]",
     "CoffeeSetupMug": "[COFFEE_SETUP_MUG]",

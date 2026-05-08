@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Launch SFT VLM training on PnPRedLegoToBrownBowl (8x A6000, DeepSpeed ZeRO-3).
+#
+# Activate the env first:
+# conda activate vlmoverlay
+#
+# Then:
+# bash examples/scripts/myscripts/launch_lego.sh
+set -e
+conda activate vlmoverlay
+
+cd /proj/vondrick3/sruthi/Appaji/trl
+
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch \
+--num_processes=8 --gpu_ids=0,1,2,3,4,5,6,7 \
+--config_file examples/accelerate_configs/deepspeed_zero2.yaml \
+examples/scripts/myscripts/sft_vlm_lego.py \
+--model_name_or_path /proj/vondrick3/sruthi/robots/sruthi_dreamitate/pretrained_vlms/Qwen2.5-VL-3B-Instruct/ \
+--attn_implementation flash_attention_2 \
+--dataset_root /proj/vondrick3/datasets/VLMjgd/PnPRedLegoToBrownBowl \
+--task_name PnPRedLegoToBrownBowl \
+--failure_indices 1-20 \
+--success_indices 1-50 \
+--eval_failure_indices 18-20 \
+--eval_success_indices 18-20 \
+--output_dir "outputs/PnPRedLegoToBrownBowl_$(date +%Y%m%d_%H%M%S)" \
+--eval_strategy steps \
+--logging_steps 10 \
+--eval_steps 90 \
+--save_steps 90 \
+--gradient_accumulation_steps 2 \
+--num_train_epochs 100 \
+--learning_rate 1e-5 \
+--per_device_train_batch_size 4 \
+--per_device_eval_batch_size 4 \
+--compare_interval 4,8,12,16 \
+--train_sample_interval 8 \
+--failure_last_frac 0.50 \
+--failure_min_frames 8 \
+--eval_max_pairs 200 \
+--report_to wandb 
+
+
+Todo tmr:
+cv12
+0. DP rollouts and check its all good 
+cv14: claude --resume 330fbcb4-326c-4e9b-80a7-09a97b2b9433
+1. switch to 7b qwen model 
+2. train vlm with success and failure (make sure mae threshold works, or just dont care)
+3. train vlm with just success

@@ -20,7 +20,14 @@
       "WebFetch(domain:progresslm.github.io)",
       "Bash(gh api repos/ProgressLM/ProgressLM --jq '.description, .default_branch' 2>&1 || echo \"gh failed, trying curl\")",
       "Bash(ls realworld_dataset/PushCoasterToMug-Nominal-real/*/ 2>/dev/null | head -20)",
-      "Bash(ls /tmp/test_progresslm_realworld/PutKiwiInCenterOfTable-ObjectCentricDistributionShift-real/0/demo_*.png)"
+      "Bash(ls /tmp/test_progresslm_realworld/PutKiwiInCenterOfTable-ObjectCentricDistributionShift-real/0/demo_*.png)",
+      "Bash(grep -E \"^\\(success|failure\\)_[0-9]+_[0-9-]+\\\\.npy$\")",
+      "Bash(sort -t_ -k1,1 -k2,2n)",
+      "Bash(grep \".npy$\")",
+      "Bash(conda env *)",
+      "Bash(/proj/vondrick3/sruthi/miniconda3/envs/myovera/bin/python *)",
+      "Bash(nvidia-smi)",
+      "Bash(nvidia-smi --query-gpu=memory.free --format=csv,noheader)"
     ]
   }
 }

@@ -42,6 +42,8 @@ def extract_frame(source_path: str, frame_idx: int) -> Image.Image:
         return Image.fromarray(frame_array)
     else:
         png_path = os.path.join(source_path, f"frame_{frame_idx:06d}.png")
+        if not os.path.isfile(png_path):
+            png_path = os.path.join(source_path, f"frame_{frame_idx:06d}.jpg")
         return Image.open(png_path).convert("RGB")
 
 
