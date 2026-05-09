@@ -13,12 +13,12 @@ Job file format (written atomically by the producer — tmp → rename):
     }
 
 Usage:
-    conda activate vlmoverlay
-    cd /proj/vondrick3/sruthi/Appaji/trl
-    CUDA_VISIBLE_DEVICES=0 python examples/scripts/myscripts/rank_serve.py \\
-        --inbox_dir /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_inbox \\
-        --done_dir  /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_done \\
-        --error_dir /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_errors
+conda activate vlmoverlay
+cd /proj/vondrick3/sruthi/Appaji/trl
+CUDA_VISIBLE_DEVICES=0 python examples/scripts/myscripts/rank_serve.py \
+--inbox_dir /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_inbox \
+--done_dir  /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_done \
+--error_dir /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_errors
 """
 
 import argparse
