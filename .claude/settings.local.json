@@ -30,7 +30,9 @@
       "Bash(nvidia-smi --query-gpu=memory.free --format=csv,noheader)",
       "Bash(nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv,noheader,nounits)",
       "Bash(awk -F, '{free=$3-$2; if \\(free > 8000\\) print \"GPU \"$1\": \"free\" MiB free\"}')",
-      "Bash(nvidia-smi *)"
+      "Bash(nvidia-smi *)",
+      "Bash(ls -d success_18_*_frames success_19_*_frames success_20_*_frames success_318_*_frames)",
+      "Bash(ls -d failure_18_*_frames failure_19_*_frames failure_318_*_frames)"
     ]
   }
 }
