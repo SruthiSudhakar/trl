@@ -39,6 +39,7 @@ wins:
 
 import argparse
 import glob
+import json
 import logging
 import os
 import re
@@ -62,7 +63,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CHECKPOINT = (
     "/proj/vondrick3/sruthi/Appaji/trl/outputs/"
-    "PnPRedLegoToBrownBowl_20260508_165458_960x540/checkpoint-200"
+    "PnPRedLegoToBrownBowl_20260508_220901_moredata_balance_si2/checkpoint-1750"
 )
 
 SIGNED_INT_RE = re.compile(r"-?\d+")
@@ -93,38 +94,39 @@ def get_last_frame(path: str):
     raise FileNotFoundError(f"Not a .mp4 file or frame directory: {path}")
 
 
-def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("videos", nargs=4, help="Exactly 4 video paths (.mp4 or frame dirs)")
-    p.add_argument("--checkpoint", default=DEFAULT_CHECKPOINT)
-    p.add_argument("--task_name", default="PnPRedLegoToBrownBowl")
-    p.add_argument("--max_pixels", default="960x540", help="WxH image budget")
-    args = p.parse_args()
-
-    for v in args.videos:
-        if not (os.path.isfile(v) or os.path.isdir(v)):
-            raise FileNotFoundError(f"Video path does not exist: {v}")
-
-    task_token = TASK_TOKENS[args.task_name]
-    user_text = LEGO_USER_PROMPT_TEMPLATE.format(task_token=task_token)
-
-    logger.info("Extracting last frame from each of the 4 videos")
-    frames = [get_last_frame(v) for v in args.videos]
-
-    w, h = (int(x) for x in args.max_pixels.split("x"))
+def load_ranker(checkpoint: str, max_pixels_wh: str = "960x540"):
+    """Load (processor, model) for the ranker. Pinned to cuda:0 with bf16 + flash-attn-2."""
+    w, h = (int(x) for x in max_pixels_wh.split("x"))
     max_pixels = w * h
 
-    logger.info(f"Loading model from {args.checkpoint}")
-    processor = AutoProcessor.from_pretrained(args.checkpoint, max_pixels=max_pixels)
+    logger.info(f"Loading model from {checkpoint}")
+    processor = AutoProcessor.from_pretrained(checkpoint, max_pixels=max_pixels)
     model = AutoModelForImageTextToText.from_pretrained(
-        args.checkpoint,
+        checkpoint,
         torch_dtype=torch.bfloat16,
         attn_implementation="flash_attention_2",
         device_map="cuda:0",
     )
     model.eval()
+    return processor, model
+
+
+def rank_videos(video_paths, processor, model, task_name: str = "PnPRedLegoToBrownBowl") -> dict:
+    """Run the 6 pairwise comparisons across 4 videos and return a structured result dict."""
+    if len(video_paths) != 4:
+        raise ValueError(f"rank_videos requires exactly 4 paths, got {len(video_paths)}")
+    for v in video_paths:
+        if not (os.path.isfile(v) or os.path.isdir(v)):
+            raise FileNotFoundError(f"Video path does not exist: {v}")
+
+    task_token = TASK_TOKENS[task_name]
+    user_text = LEGO_USER_PROMPT_TEMPLATE.format(task_token=task_token)
+
+    logger.info("Extracting last frame from each of the 4 videos")
+    frames = [get_last_frame(v) for v in video_paths]
 
     votes = [0, 0, 0, 0]
+    pairs = []
     for i, j in combinations(range(4), 2):
         f1, f2 = frames[i], frames[j]
         mm = [
@@ -168,19 +170,50 @@ def main():
             f"  pair ({i},{j}): gen={gen!r} pred={pred} "
             f"winner={winner_idx if winner_idx is not None else 'none'}"
         )
+        pairs.append({"i": i, "j": j, "gen": gen, "pred": pred, "winner": winner_idx})
 
     logger.info("Vote tally:")
-    for k, v in enumerate(args.videos):
+    for k, v in enumerate(video_paths):
         logger.info(f"  [{k}] votes={votes[k]}  {v}")
 
     max_votes = max(votes)
     tied = [k for k, c in enumerate(votes) if c == max_votes]
     if len(tied) > 1:
-        tied_paths = [args.videos[k] for k in tied]
+        tied_paths = [video_paths[k] for k in tied]
         logger.warning(f"Tie ({max_votes} votes) between: {tied_paths} — picking first")
-    winner = args.videos[tied[0]]
+    winner_idx = tied[0]
+    winner = video_paths[winner_idx]
 
-    print(winner)
+    return {
+        "video_paths": list(video_paths),
+        "task_name": task_name,
+        "votes": votes,
+        "pairs": pairs,
+        "winner": winner,
+        "winner_idx": winner_idx,
+        "tied_indices": tied,
+    }
+
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("videos", nargs=4, help="Exactly 4 video paths (.mp4 or frame dirs)")
+    p.add_argument("--checkpoint", default=DEFAULT_CHECKPOINT)
+    p.add_argument("--task_name", default="PnPRedLegoToBrownBowl")
+    p.add_argument("--max_pixels", default="960x540", help="WxH image budget")
+    p.add_argument("--output_json", default=None,
+                   help="If set, write the full ranking dict to this JSON path before printing the winner.")
+    args = p.parse_args()
+
+    processor, model = load_ranker(args.checkpoint, args.max_pixels)
+    result = rank_videos(args.videos, processor, model, task_name=args.task_name)
+
+    if args.output_json:
+        with open(args.output_json, "w") as f:
+            json.dump(result, f, indent=2)
+        logger.info(f"Wrote ranking JSON to {args.output_json}")
+
+    print(result["winner"])
 
 
 if __name__ == "__main__":

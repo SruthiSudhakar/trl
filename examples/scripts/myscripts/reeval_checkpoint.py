@@ -11,6 +11,14 @@ CUDA_VISIBLE_DEVICES=7 python examples/scripts/myscripts/reeval_checkpoint.py \
 --eval_success_indices 18-20,318-320 \
 --max_pixels 960x540
 
+  CUDA_VISIBLE_DEVICES=7 python examples/scripts/myscripts/reeval_checkpoint.py \
+    --checkpoint outputs/PnPRedLegoToBrownBowl_20260508_220901_moredata_balance_si2/checkpoint-1750 \
+    --dataset_root /proj/vondrick3/datasets/VLMjgd/PnPRedLegoToBrownBowl \
+    --eval_failure_indices 18-20,318-320 \
+    --eval_success_indices 18-20,318-320 \
+    --max_pixels 960x540
+
+
 """
 
 import argparse
