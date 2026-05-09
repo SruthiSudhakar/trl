@@ -39,28 +39,29 @@ examples/scripts/myscripts/sft_vlm_lego.py \
 --attn_implementation flash_attention_2 \
 --dataset_root /proj/vondrick3/datasets/VLMjgd/PnPRedLegoToBrownBowl \
 --task_name PnPRedLegoToBrownBowl \
---failure_indices 1-20 \
---success_indices 1-50 \
---eval_failure_indices 18-20 \
---eval_success_indices 18-20 \
---output_dir "outputs/PnPRedLegoToBrownBowl_$(date +%Y%m%d_%H%M%S)_wr" \
+--failure_indices 1-20,302-320 \
+--success_indices 1-50,302-320 \
+--eval_failure_indices 18-20,318-320 \
+--eval_success_indices 18-20,318-320 \
+--output_dir "outputs/PnPRedLegoToBrownBowl_$(date +%Y%m%d_%H%M%S)_moredata_balance_si2" \
 --eval_strategy steps \
 --logging_steps 10 \
 --eval_steps 50 \
 --save_steps 50 \
 --gradient_accumulation_steps 2 \
---num_train_epochs 100 \
+--num_train_epochs 50 \
 --learning_rate 1e-5 \
 --per_device_train_batch_size 4 \
 --per_device_eval_batch_size 4 \
 --compare_interval 4,8,12,16 \
---train_sample_interval 8 \
+--train_sample_interval 2 \
 --failure_last_frac 0.50 \
 --failure_min_frames 8 \
 --eval_max_pairs 200 \
 --report_to wandb \
---warmup_ratio 0.03 \
---max_pixels 960x540
+--warmup_ratio 0.05 \
+--max_pixels 960x540 \
+--balance_fail_vs_succ True
 
 
 Todo tmr:

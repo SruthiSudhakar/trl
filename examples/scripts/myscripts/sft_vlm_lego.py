@@ -424,6 +424,7 @@ class LegoArgs:
     just_visualize: bool = False
     task_name: str = "PnPRedLegoToBrownBowl"
     max_pixels: str = "640x360"  # WxH; processor budget per image
+    balance_fail_vs_succ: bool = False  # if True, replicate fail_vs_succ train pairs so their count matches succ_vs_succ
 
 
 if __name__ == "__main__":
@@ -473,6 +474,24 @@ if __name__ == "__main__":
         rng=random.Random(43),
     )
     logger.info(f"Pair counts -> train: {len(train_pairs)}, eval: {len(eval_pairs)}")
+
+    if lego.balance_fail_vs_succ:
+        succ_pairs = [p for p in train_pairs if p["bucket"] != "fail_vs_succ"]
+        fail_pairs = [p for p in train_pairs if p["bucket"] == "fail_vs_succ"]
+        if fail_pairs and succ_pairs:
+            reps = len(succ_pairs) // len(fail_pairs)
+            remainder = len(succ_pairs) - reps * len(fail_pairs)
+            balance_rng = random.Random(44)
+            balanced_fail = fail_pairs * reps + balance_rng.sample(fail_pairs, remainder)
+            train_pairs = succ_pairs + balanced_fail
+            balance_rng.shuffle(train_pairs)
+            logger.info(
+                f"Balanced fail_vs_succ: {len(fail_pairs)} unique -> {len(balanced_fail)} "
+                f"after replication ({reps}x + {remainder} extra) to match {len(succ_pairs)} succ_vs_succ pairs. "
+                f"New train total: {len(train_pairs)}"
+            )
+        else:
+            logger.warning("balance_fail_vs_succ requested but one bucket is empty; skipping.")
 
     train_demos = {(p["demo_success"], p["demo_id"]) for p in train_pairs}
     eval_demos = {(p["demo_success"], p["demo_id"]) for p in eval_pairs}

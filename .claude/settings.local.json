@@ -27,7 +27,10 @@
       "Bash(conda env *)",
       "Bash(/proj/vondrick3/sruthi/miniconda3/envs/myovera/bin/python *)",
       "Bash(nvidia-smi)",
-      "Bash(nvidia-smi --query-gpu=memory.free --format=csv,noheader)"
+      "Bash(nvidia-smi --query-gpu=memory.free --format=csv,noheader)",
+      "Bash(nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv,noheader,nounits)",
+      "Bash(awk -F, '{free=$3-$2; if \\(free > 8000\\) print \"GPU \"$1\": \"free\" MiB free\"}')",
+      "Bash(nvidia-smi *)"
     ]
   }
 }
