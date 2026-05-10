@@ -1,9 +1,10 @@
-"""Pick the best of 4 candidate videos using a trained Qwen2.5-VL checkpoint.
+"""Pick the best of N candidate videos using a trained Qwen2.5-VL checkpoint.
 
-Extracts the last frame of each video, runs the 6 unordered pairwise
-comparisons (one ordering each) through the checkpoint, tallies which video's
-frame got the "more task progress" label most often, and prints that video
-path on stdout. Per-pair generations and vote tally go to stderr.
+Extracts the last frame of each video, runs the C(N, 2) unordered pairwise
+comparisons (one ordering each) through the checkpoint in batches, tallies
+which video's frame got the "more task progress" label most often, and
+prints that video path on stdout. Per-pair generations and vote tally go to
+stderr.
 
 Example:
     CUDA_VISIBLE_DEVICES=0 python examples/scripts/myscripts/rank_videos.py \\
@@ -101,6 +102,8 @@ def load_ranker(checkpoint: str, max_pixels_wh: str = "960x540"):
 
     logger.info(f"Loading model from {checkpoint}")
     processor = AutoProcessor.from_pretrained(checkpoint, max_pixels=max_pixels)
+    # Left-pad so out[:, input_ids.shape[1]:] cleanly extracts new tokens when batching.
+    processor.tokenizer.padding_side = "left"
     model = AutoModelForImageTextToText.from_pretrained(
         checkpoint,
         torch_dtype=torch.bfloat16,
@@ -111,66 +114,87 @@ def load_ranker(checkpoint: str, max_pixels_wh: str = "960x540"):
     return processor, model
 
 
-def rank_videos(video_paths, processor, model, task_name: str = "PnPRedLegoToBrownBowl") -> dict:
-    """Run the 6 pairwise comparisons across 4 videos and return a structured result dict."""
-    if len(video_paths) != 4:
-        raise ValueError(f"rank_videos requires exactly 4 paths, got {len(video_paths)}")
+def rank_videos(
+    video_paths,
+    processor,
+    model,
+    task_name: str = "PnPRedLegoToBrownBowl",
+    batch_size: int = 4,
+) -> dict:
+    """Run the C(N, 2) pairwise comparisons across N videos and return a structured result dict.
+
+    Comparisons are run in mini-batches of size `batch_size` for throughput.
+    """
+    n = len(video_paths)
+    if n < 2:
+        raise ValueError(f"rank_videos requires at least 2 paths, got {n}")
     for v in video_paths:
         if not (os.path.isfile(v) or os.path.isdir(v)):
             raise FileNotFoundError(f"Video path does not exist: {v}")
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be >= 1, got {batch_size}")
 
     task_token = TASK_TOKENS[task_name]
     user_text = LEGO_USER_PROMPT_TEMPLATE.format(task_token=task_token)
 
-    logger.info("Extracting last frame from each of the 4 videos")
+    logger.info(f"Extracting last frame from each of the {n} videos")
     frames = [get_last_frame(v) for v in video_paths]
 
-    votes = [0, 0, 0, 0]
+    # Every pair has the same prompt structure (2 images + same user text), so render once.
+    mm_template = [
+        {"role": "system", "content": [{"type": "text", "text": LEGO_SYSTEM_PROMPT}]},
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": frames[0]},
+                {"type": "image", "image": frames[0]},
+                {"type": "text", "text": user_text},
+            ],
+        },
+    ]
+    text = processor.apply_chat_template(mm_template, tokenize=False, add_generation_prompt=True)
+
+    all_pairs = list(combinations(range(n), 2))
+    votes = [0] * n
     pairs = []
-    for i, j in combinations(range(4), 2):
-        f1, f2 = frames[i], frames[j]
-        mm = [
-            {"role": "system", "content": [{"type": "text", "text": LEGO_SYSTEM_PROMPT}]},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": f1},
-                    {"type": "image", "image": f2},
-                    {"type": "text", "text": user_text},
-                ],
-            },
-        ]
-        text = processor.apply_chat_template(mm, tokenize=False, add_generation_prompt=True)
-        inputs = processor(text=[text], images=[[f1, f2]], return_tensors="pt", padding=True)
+
+    for start in range(0, len(all_pairs), batch_size):
+        chunk = all_pairs[start:start + batch_size]
+        image_lists = [[frames[i], frames[j]] for i, j in chunk]
+        texts = [text] * len(chunk)
+
+        inputs = processor(text=texts, images=image_lists, return_tensors="pt", padding=True)
         inputs = {kk: v.to(model.device) if hasattr(v, "to") else v for kk, v in inputs.items()}
 
         with torch.no_grad():
             out = model.generate(**inputs, max_new_tokens=8, do_sample=False)
-        gen = processor.batch_decode(
+        gens = processor.batch_decode(
             out[:, inputs["input_ids"].shape[1]:], skip_special_tokens=True
-        )[0].strip()
-
-        m = SIGNED_INT_RE.search(gen)
-        pred = int(m.group(0)) if m else None
-
-        if pred is None:
-            logger.warning(f"  pair ({i},{j}) unparsed gen={gen!r} — no vote")
-            winner_idx = None
-        elif pred > 0:
-            votes[j] += 1
-            winner_idx = j
-        elif pred < 0:
-            votes[i] += 1
-            winner_idx = i
-        else:
-            logger.warning(f"  pair ({i},{j}) pred=0 — no vote")
-            winner_idx = None
-
-        logger.info(
-            f"  pair ({i},{j}): gen={gen!r} pred={pred} "
-            f"winner={winner_idx if winner_idx is not None else 'none'}"
         )
-        pairs.append({"i": i, "j": j, "gen": gen, "pred": pred, "winner": winner_idx})
+
+        for (i, j), gen in zip(chunk, gens):
+            gen = gen.strip()
+            m = SIGNED_INT_RE.search(gen)
+            pred = int(m.group(0)) if m else None
+
+            if pred is None:
+                logger.warning(f"  pair ({i},{j}) unparsed gen={gen!r} — no vote")
+                winner_idx = None
+            elif pred > 0:
+                votes[j] += 1
+                winner_idx = j
+            elif pred < 0:
+                votes[i] += 1
+                winner_idx = i
+            else:
+                logger.warning(f"  pair ({i},{j}) pred=0 — no vote")
+                winner_idx = None
+
+            logger.info(
+                f"  pair ({i},{j}): gen={gen!r} pred={pred} "
+                f"winner={winner_idx if winner_idx is not None else 'none'}"
+            )
+            pairs.append({"i": i, "j": j, "gen": gen, "pred": pred, "winner": winner_idx})
 
     logger.info("Vote tally:")
     for k, v in enumerate(video_paths):
@@ -197,16 +221,23 @@ def rank_videos(video_paths, processor, model, task_name: str = "PnPRedLegoToBro
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("videos", nargs=4, help="Exactly 4 video paths (.mp4 or frame dirs)")
+    p.add_argument("videos", nargs="+", help="2 or more video paths (.mp4 or frame dirs)")
     p.add_argument("--checkpoint", default=DEFAULT_CHECKPOINT)
     p.add_argument("--task_name", default="PnPRedLegoToBrownBowl")
     p.add_argument("--max_pixels", default="960x540", help="WxH image budget")
+    p.add_argument("--batch_size", type=int, default=4, help="Pairwise comparisons per generate() call")
     p.add_argument("--output_json", default=None,
                    help="If set, write the full ranking dict to this JSON path before printing the winner.")
     args = p.parse_args()
 
+    if len(args.videos) < 2:
+        p.error(f"need at least 2 videos, got {len(args.videos)}")
+
     processor, model = load_ranker(args.checkpoint, args.max_pixels)
-    result = rank_videos(args.videos, processor, model, task_name=args.task_name)
+    result = rank_videos(
+        args.videos, processor, model,
+        task_name=args.task_name, batch_size=args.batch_size,
+    )
 
     if args.output_json:
         with open(args.output_json, "w") as f:

@@ -1,14 +1,15 @@
 """Long-running ranker server. Pairs with HunyuanVideo-1.5-train-sruthi/serve.py.
 
-Watches an inbox of small JSON job files. Each job names exactly 4 video paths
+Watches an inbox of small JSON job files. Each job names 2 or more video paths
 plus the output subdir where a `ranking.json` should land. Loads the
-Qwen2.5-VL ranker once at startup and reuses it across jobs.
+Qwen2.5-VL ranker once at startup and reuses it across jobs. The C(N, 2)
+pairwise comparisons within a job are run in mini-batches (--batch_size).
 
 Job file format (written atomically by the producer — tmp → rename):
     {
       "name": "<manifest_stem>",
       "output_subdir": "/abs/.../<name>",
-      "video_paths": ["/abs/.../0.mp4", "/abs/.../1.mp4", "/abs/.../2.mp4", "/abs/.../3.mp4"],
+      "video_paths": ["/abs/.../0.mp4", "/abs/.../1.mp4", ...],
       "task_name": "PnPRedLegoToBrownBowl"
     }
 
@@ -42,7 +43,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def process_job(job_path: Path, processor, model, default_task_name: str):
+def process_job(job_path: Path, processor, model, default_task_name: str, batch_size: int):
     """Read a job json, run rank_videos, write ranking.json next to the videos."""
     with open(job_path, "r") as f:
         job = json.load(f)
@@ -52,16 +53,18 @@ def process_job(job_path: Path, processor, model, default_task_name: str):
     video_paths = job["video_paths"]
     task_name = job.get("task_name", default_task_name)
 
-    if len(video_paths) != 4:
-        raise ValueError(f"job {name}: expected 4 video paths, got {len(video_paths)}")
+    if len(video_paths) < 2:
+        raise ValueError(f"job {name}: expected >=2 video paths, got {len(video_paths)}")
     for v in video_paths:
         if not (os.path.isfile(v) or os.path.isdir(v)):
             raise FileNotFoundError(f"job {name}: missing video {v}")
     if not output_subdir.is_dir():
         raise FileNotFoundError(f"job {name}: output_subdir does not exist: {output_subdir}")
 
-    logger.info(f"[rank_serve] processing {name}: {video_paths}")
-    result = rank_videos(video_paths, processor, model, task_name=task_name)
+    logger.info(f"[rank_serve] processing {name} ({len(video_paths)} videos): {video_paths}")
+    result = rank_videos(
+        video_paths, processor, model, task_name=task_name, batch_size=batch_size,
+    )
 
     out_path = output_subdir / "ranking.json"
     with open(out_path, "w") as f:
@@ -96,7 +99,7 @@ def serve(args):
             )
             for job_path in jobs:
                 try:
-                    process_job(job_path, processor, model, args.task_name)
+                    process_job(job_path, processor, model, args.task_name, args.batch_size)
                     archive(job_path, done_dir)
                 except Exception as e:
                     logger.error(f"[rank_serve] ERROR on {job_path.name}: {e!r}")
@@ -115,6 +118,7 @@ def main():
     p.add_argument("--checkpoint", default=DEFAULT_CHECKPOINT)
     p.add_argument("--task_name", default="PnPRedLegoToBrownBowl")
     p.add_argument("--max_pixels", default="960x540", help="WxH image budget")
+    p.add_argument("--batch_size", type=int, default=4, help="Pairwise comparisons per generate() call")
     p.add_argument("--poll_interval", type=float, default=1.0)
     args = p.parse_args()
     serve(args)
