@@ -190,6 +190,7 @@ TASK_TOKENS = {
     "BimanualSetUpBreakfastTable": "[SETUP_BREAKFAST_TABLE]",
     "CleanLitterBox": "[CLEAN_LITTERBOX]",
     "CutAppleIntoSlices": "[CUT_APPLE]",
+    "UprightBottle": "[UPRIGHT_BOTTLE]",
 }
 
 SYSTEM_PROMPT = "Compare robot task progress. Respond with a number: positive if right image shows more progress, negative if less."
