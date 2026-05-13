@@ -13,13 +13,20 @@ Job file format (written atomically by the producer — tmp → rename):
       "task_name": "PnPRedLegoToBrownBowl"
     }
 
-Usage:
+Usage (single GPU):
 conda activate vlmoverlay
 cd /proj/vondrick3/sruthi/Appaji/trl
 CUDA_VISIBLE_DEVICES=0 python examples/scripts/myscripts/rank_serve.py \
 --inbox_dir /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_inbox \
 --done_dir  /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_done \
 --error_dir /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_errors
+
+Usage (8 GPUs, pairs sharded across all of them with batch=8 per GPU):
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python examples/scripts/myscripts/rank_serve.py \
+--inbox_dir /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_inbox \
+--done_dir  /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_done \
+--error_dir /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_errors \
+--gpu_ids 0,1,2,3,4,5,6,7 --batch_size 8
 """
 
 import argparse
@@ -33,7 +40,7 @@ import traceback
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rank_videos import DEFAULT_CHECKPOINT, load_ranker, rank_videos  # noqa: E402
+from rank_videos import DEFAULT_CHECKPOINT, load_ranker_multi, rank_videos_multi  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,8 +50,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def process_job(job_path: Path, processor, model, default_task_name: str, batch_size: int):
-    """Read a job json, run rank_videos, write ranking.json next to the videos."""
+def process_job(job_path: Path, processors, models, default_task_name: str, batch_size: int, frame_fraction: float):
+    """Read a job json, run rank_videos_multi, write ranking.json next to the videos."""
     with open(job_path, "r") as f:
         job = json.load(f)
 
@@ -62,8 +69,9 @@ def process_job(job_path: Path, processor, model, default_task_name: str, batch_
         raise FileNotFoundError(f"job {name}: output_subdir does not exist: {output_subdir}")
 
     logger.info(f"[rank_serve] processing {name} ({len(video_paths)} videos): {video_paths}")
-    result = rank_videos(
-        video_paths, processor, model, task_name=task_name, batch_size=batch_size,
+    result = rank_videos_multi(
+        video_paths, processors, models, task_name=task_name,
+        batch_size=batch_size, frame_fraction=frame_fraction,
     )
 
     out_path = output_subdir / "ranking.json"
@@ -80,8 +88,17 @@ def archive(job_path: Path, dst_dir: Path):
     shutil.move(str(job_path), str(target))
 
 
+def parse_gpu_ids(s: str):
+    ids = [int(x.strip()) for x in s.split(",") if x.strip()]
+    if not ids:
+        raise ValueError(f"--gpu_ids must list at least one GPU; got {s!r}")
+    return ids
+
+
 def serve(args):
-    processor, model = load_ranker(args.checkpoint, args.max_pixels)
+    gpu_ids = parse_gpu_ids(args.gpu_ids)
+    processors, models = load_ranker_multi(args.checkpoint, args.max_pixels, gpu_ids)
+    logger.info(f"[rank_serve] loaded ranker on {len(gpu_ids)} GPU(s): {gpu_ids}")
 
     inbox = Path(args.inbox_dir)
     done_dir = Path(args.done_dir)
@@ -99,7 +116,7 @@ def serve(args):
             )
             for job_path in jobs:
                 try:
-                    process_job(job_path, processor, model, args.task_name, args.batch_size)
+                    process_job(job_path, processors, models, args.task_name, args.batch_size, args.frame_fraction)
                     archive(job_path, done_dir)
                 except Exception as e:
                     logger.error(f"[rank_serve] ERROR on {job_path.name}: {e!r}")
@@ -118,7 +135,11 @@ def main():
     p.add_argument("--checkpoint", default=DEFAULT_CHECKPOINT)
     p.add_argument("--task_name", default="PnPRedLegoToBrownBowl")
     p.add_argument("--max_pixels", default="960x540", help="WxH image budget")
-    p.add_argument("--batch_size", type=int, default=4, help="Pairwise comparisons per generate() call")
+    p.add_argument("--batch_size", type=int, default=4, help="Pairwise comparisons per generate() call (per GPU)")
+    p.add_argument("--gpu_ids", default="0",
+                   help="Comma-separated GPU ids to shard pair generation across, e.g. '0,1,2,3,4,5,6,7'")
+    p.add_argument("--frame_fraction", type=float, default=1.0,
+                   help="Which frame to compare; fraction of the last index (1.0=last, 0.5=middle)")
     p.add_argument("--poll_interval", type=float, default=1.0)
     args = p.parse_args()
     serve(args)

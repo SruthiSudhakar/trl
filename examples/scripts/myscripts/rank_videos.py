@@ -45,6 +45,7 @@ import logging
 import os
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from itertools import combinations
 
 import torch
@@ -70,14 +71,21 @@ DEFAULT_CHECKPOINT = (
 SIGNED_INT_RE = re.compile(r"-?\d+")
 
 
-def get_last_frame(path: str):
-    """Return the last frame of an .mp4 file or a frame directory as a PIL Image."""
+def get_frame_at_fraction(path: str, fraction: float = 1.0):
+    """Return the frame at floor(last_idx * fraction) of an .mp4 or frame directory.
+
+    fraction=1.0 returns the last frame; fraction=0.5 returns the middle frame.
+    """
+    if not 0.0 <= fraction <= 1.0:
+        raise ValueError(f"fraction must be in [0, 1], got {fraction}")
+
     if path.endswith(".mp4"):
         vr = _get_video_reader(path)
-        last_idx = len(vr) - 1
-        if last_idx < 0:
+        n = len(vr)
+        if n == 0:
             raise ValueError(f"Video has no frames: {path}")
-        return extract_frame(path, last_idx)
+        idx = int((n - 1) * fraction)
+        return extract_frame(path, idx)
 
     if os.path.isdir(path):
         files = sorted(
@@ -86,10 +94,10 @@ def get_last_frame(path: str):
         )
         if not files:
             raise ValueError(f"No frame_*.png/jpg files in directory: {path}")
-        last_name = os.path.basename(files[-1])
-        m = re.search(r"frame_(\d+)\.(?:png|jpg)$", last_name)
+        target = os.path.basename(files[int((len(files) - 1) * fraction)])
+        m = re.search(r"frame_(\d+)\.(?:png|jpg)$", target)
         if not m:
-            raise ValueError(f"Could not parse frame index from {last_name}")
+            raise ValueError(f"Could not parse frame index from {target}")
         return extract_frame(path, int(m.group(1)))
 
     raise FileNotFoundError(f"Not a .mp4 file or frame directory: {path}")
@@ -114,33 +122,30 @@ def load_ranker(checkpoint: str, max_pixels_wh: str = "960x540"):
     return processor, model
 
 
-def rank_videos(
-    video_paths,
-    processor,
-    model,
-    task_name: str = "PnPRedLegoToBrownBowl",
-    batch_size: int = 4,
-) -> dict:
-    """Run the C(N, 2) pairwise comparisons across N videos and return a structured result dict.
+def load_ranker_multi(checkpoint: str, max_pixels_wh: str = "960x540", gpu_ids=(0,)):
+    """Load one (processor, model) pair per GPU. Returns (processors, models) lists."""
+    w, h = (int(x) for x in max_pixels_wh.split("x"))
+    max_pixels = w * h
 
-    Comparisons are run in mini-batches of size `batch_size` for throughput.
-    """
-    n = len(video_paths)
-    if n < 2:
-        raise ValueError(f"rank_videos requires at least 2 paths, got {n}")
-    for v in video_paths:
-        if not (os.path.isfile(v) or os.path.isdir(v)):
-            raise FileNotFoundError(f"Video path does not exist: {v}")
-    if batch_size < 1:
-        raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+    processors, models = [], []
+    for k, gid in enumerate(gpu_ids):
+        logger.info(f"Loading model from {checkpoint} onto cuda:{gid} ({k+1}/{len(gpu_ids)})")
+        processor = AutoProcessor.from_pretrained(checkpoint, max_pixels=max_pixels)
+        processor.tokenizer.padding_side = "left"
+        model = AutoModelForImageTextToText.from_pretrained(
+            checkpoint,
+            torch_dtype=torch.bfloat16,
+            attn_implementation="flash_attention_2",
+            device_map=f"cuda:{gid}",
+        )
+        model.eval()
+        processors.append(processor)
+        models.append(model)
+    return processors, models
 
-    task_token = TASK_TOKENS[task_name]
-    user_text = LEGO_USER_PROMPT_TEMPLATE.format(task_token=task_token)
 
-    logger.info(f"Extracting last frame from each of the {n} videos")
-    frames = [get_last_frame(v) for v in video_paths]
-
-    # Every pair has the same prompt structure (2 images + same user text), so render once.
+def _build_prompt_text(processor, frames, user_text):
+    """Render the chat-template text once. Same for every pair (2 image slots + same user text)."""
     mm_template = [
         {"role": "system", "content": [{"type": "text", "text": LEGO_SYSTEM_PROMPT}]},
         {
@@ -152,49 +157,51 @@ def rank_videos(
             ],
         },
     ]
-    text = processor.apply_chat_template(mm_template, tokenize=False, add_generation_prompt=True)
+    return processor.apply_chat_template(mm_template, tokenize=False, add_generation_prompt=True)
 
-    all_pairs = list(combinations(range(n), 2))
+
+def _run_pair_chunk(processor, model, frames, chunk, text):
+    """Run generate() on one chunk of pair indices. Returns [(i, j, gen_text), ...]."""
+    image_lists = [[frames[i], frames[j]] for i, j in chunk]
+    texts = [text] * len(chunk)
+    inputs = processor(text=texts, images=image_lists, return_tensors="pt", padding=True)
+    inputs = {kk: v.to(model.device) if hasattr(v, "to") else v for kk, v in inputs.items()}
+    with torch.no_grad():
+        out = model.generate(**inputs, max_new_tokens=8, do_sample=False)
+    gens = processor.batch_decode(
+        out[:, inputs["input_ids"].shape[1]:], skip_special_tokens=True
+    )
+    return [(i, j, g.strip()) for (i, j), g in zip(chunk, gens)]
+
+
+def _summarize_results(video_paths, task_name, all_results):
+    """Tally votes from a list of (i, j, gen_text) tuples and produce the final ranking dict."""
+    n = len(video_paths)
     votes = [0] * n
     pairs = []
+    all_results.sort(key=lambda r: (r[0], r[1]))
+    for i, j, gen in all_results:
+        m = SIGNED_INT_RE.search(gen)
+        pred = int(m.group(0)) if m else None
 
-    for start in range(0, len(all_pairs), batch_size):
-        chunk = all_pairs[start:start + batch_size]
-        image_lists = [[frames[i], frames[j]] for i, j in chunk]
-        texts = [text] * len(chunk)
+        if pred is None:
+            logger.warning(f"  pair ({i},{j}) unparsed gen={gen!r} — no vote")
+            winner_idx = None
+        elif pred > 0:
+            votes[j] += 1
+            winner_idx = j
+        elif pred < 0:
+            votes[i] += 1
+            winner_idx = i
+        else:
+            logger.warning(f"  pair ({i},{j}) pred=0 — no vote")
+            winner_idx = None
 
-        inputs = processor(text=texts, images=image_lists, return_tensors="pt", padding=True)
-        inputs = {kk: v.to(model.device) if hasattr(v, "to") else v for kk, v in inputs.items()}
-
-        with torch.no_grad():
-            out = model.generate(**inputs, max_new_tokens=8, do_sample=False)
-        gens = processor.batch_decode(
-            out[:, inputs["input_ids"].shape[1]:], skip_special_tokens=True
+        logger.info(
+            f"  pair ({i},{j}): gen={gen!r} pred={pred} "
+            f"winner={winner_idx if winner_idx is not None else 'none'}"
         )
-
-        for (i, j), gen in zip(chunk, gens):
-            gen = gen.strip()
-            m = SIGNED_INT_RE.search(gen)
-            pred = int(m.group(0)) if m else None
-
-            if pred is None:
-                logger.warning(f"  pair ({i},{j}) unparsed gen={gen!r} — no vote")
-                winner_idx = None
-            elif pred > 0:
-                votes[j] += 1
-                winner_idx = j
-            elif pred < 0:
-                votes[i] += 1
-                winner_idx = i
-            else:
-                logger.warning(f"  pair ({i},{j}) pred=0 — no vote")
-                winner_idx = None
-
-            logger.info(
-                f"  pair ({i},{j}): gen={gen!r} pred={pred} "
-                f"winner={winner_idx if winner_idx is not None else 'none'}"
-            )
-            pairs.append({"i": i, "j": j, "gen": gen, "pred": pred, "winner": winner_idx})
+        pairs.append({"i": i, "j": j, "gen": gen, "pred": pred, "winner": winner_idx})
 
     logger.info("Vote tally:")
     for k, v in enumerate(video_paths):
@@ -219,6 +226,104 @@ def rank_videos(
     }
 
 
+def rank_videos(
+    video_paths,
+    processor,
+    model,
+    task_name: str = "PnPRedLegoToBrownBowl",
+    batch_size: int = 4,
+    frame_fraction: float = 1.0,
+) -> dict:
+    """Run the C(N, 2) pairwise comparisons across N videos and return a structured result dict.
+
+    Comparisons are run in mini-batches of size `batch_size` for throughput.
+    `frame_fraction` selects which frame of each video to compare (1.0=last, 0.5=middle).
+    """
+    n = len(video_paths)
+    if n < 2:
+        raise ValueError(f"rank_videos requires at least 2 paths, got {n}")
+    for v in video_paths:
+        if not (os.path.isfile(v) or os.path.isdir(v)):
+            raise FileNotFoundError(f"Video path does not exist: {v}")
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+
+    task_token = TASK_TOKENS[task_name]
+    user_text = LEGO_USER_PROMPT_TEMPLATE.format(task_token=task_token)
+
+    logger.info(f"Extracting frame at fraction={frame_fraction} from each of the {n} videos")
+    frames = [get_frame_at_fraction(v, frame_fraction) for v in video_paths]
+
+    text = _build_prompt_text(processor, frames, user_text)
+    all_pairs = list(combinations(range(n), 2))
+
+    all_results = []
+    for start in range(0, len(all_pairs), batch_size):
+        chunk = all_pairs[start:start + batch_size]
+        all_results.extend(_run_pair_chunk(processor, model, frames, chunk, text))
+
+    return _summarize_results(video_paths, task_name, all_results)
+
+
+def rank_videos_multi(
+    video_paths,
+    processors,
+    models,
+    task_name: str = "PnPRedLegoToBrownBowl",
+    batch_size: int = 8,
+    frame_fraction: float = 1.0,
+) -> dict:
+    """Multi-GPU version of `rank_videos`.
+
+    `processors` and `models` are parallel lists of length G (one per GPU). The
+    C(N, 2) pairs are round-robin assigned across the G GPUs and each GPU runs
+    its share in mini-batches of `batch_size` via a ThreadPoolExecutor (threads
+    release the GIL during CUDA kernels, so they overlap on different devices).
+    `frame_fraction` selects which frame of each video to compare (1.0=last, 0.5=middle).
+    """
+    n = len(video_paths)
+    if n < 2:
+        raise ValueError(f"rank_videos_multi requires at least 2 paths, got {n}")
+    for v in video_paths:
+        if not (os.path.isfile(v) or os.path.isdir(v)):
+            raise FileNotFoundError(f"Video path does not exist: {v}")
+    g = len(models)
+    if g < 1 or g != len(processors):
+        raise ValueError(f"need >=1 (processor, model) pairs of equal length, got {len(processors)}/{g}")
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+
+    task_token = TASK_TOKENS[task_name]
+    user_text = LEGO_USER_PROMPT_TEMPLATE.format(task_token=task_token)
+
+    logger.info(f"Extracting frame at fraction={frame_fraction} from each of the {n} videos")
+    frames = [get_frame_at_fraction(v, frame_fraction) for v in video_paths]
+
+    text = _build_prompt_text(processors[0], frames, user_text)
+
+    all_pairs = list(combinations(range(n), 2))
+    per_gpu = [[] for _ in range(g)]
+    for idx, p in enumerate(all_pairs):
+        per_gpu[idx % g].append(p)
+
+    def _run(gpu_idx):
+        processor, model = processors[gpu_idx], models[gpu_idx]
+        sub = per_gpu[gpu_idx]
+        out = []
+        for start in range(0, len(sub), batch_size):
+            chunk = sub[start:start + batch_size]
+            out.extend(_run_pair_chunk(processor, model, frames, chunk, text))
+        return out
+
+    all_results = []
+    with ThreadPoolExecutor(max_workers=g) as ex:
+        futures = [ex.submit(_run, k) for k in range(g)]
+        for fut in futures:
+            all_results.extend(fut.result())
+
+    return _summarize_results(video_paths, task_name, all_results)
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("videos", nargs="+", help="2 or more video paths (.mp4 or frame dirs)")
@@ -226,6 +331,8 @@ def main():
     p.add_argument("--task_name", default="PnPRedLegoToBrownBowl")
     p.add_argument("--max_pixels", default="960x540", help="WxH image budget")
     p.add_argument("--batch_size", type=int, default=4, help="Pairwise comparisons per generate() call")
+    p.add_argument("--frame_fraction", type=float, default=1.0,
+                   help="Which frame to compare; fraction of the last index (1.0=last, 0.5=middle)")
     p.add_argument("--output_json", default=None,
                    help="If set, write the full ranking dict to this JSON path before printing the winner.")
     args = p.parse_args()
@@ -237,6 +344,7 @@ def main():
     result = rank_videos(
         args.videos, processor, model,
         task_name=args.task_name, batch_size=args.batch_size,
+        frame_fraction=args.frame_fraction,
     )
 
     if args.output_json:
