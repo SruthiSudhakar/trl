@@ -69,7 +69,7 @@ random.seed(42)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-SUBSAMPLE = 3  # 30 Hz -> 10 Hz
+SUBSAMPLE = 2  # 30 Hz -> 10 Hz
 
 # Prompts: two separate images, "first" vs "second".
 SYSTEM_PROMPT = (

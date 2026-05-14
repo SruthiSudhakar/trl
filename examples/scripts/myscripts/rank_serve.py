@@ -26,7 +26,9 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python examples/scripts/myscripts/rank_serv
 --inbox_dir /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_inbox \
 --done_dir  /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_done \
 --error_dir /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_errors \
---gpu_ids 0,1,2,3,4,5,6,7 --batch_size 8
+--gpu_ids 0,1,2,3,4,5,6,7 --batch_size 8 \
+--task_name UprightBottle \
+--checkpoint /proj/vondrick3/sruthi/Appaji/trl/outputs/UprightBottle_20260512_230111/checkpoint-1100
 """
 
 import argparse
