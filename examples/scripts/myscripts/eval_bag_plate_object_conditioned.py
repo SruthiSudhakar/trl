@@ -1,21 +1,18 @@
 """
-Held-out eval for UprightBottle SFT checkpoint.
+Held-out eval for the BagPlate object-conditioned ranking VLM checkpoint.
 
-Builds success-vs-success pairs from a heldout set of demo indices (default
-51-100, which were not in training or eval), runs model.generate, parses the
-signed integer answer, and reports sign accuracy overall + per bucket
-(interval x camera).
+Reads `matches.csv`, keeps only rows where EITHER demo is in the held-out
+index set, then for each kept (sub-frame, camera) emits two examples - one
+per target object in the pair. Runs model.generate, parses the signed integer
+answer, and reports sign accuracy overall + per (pair_type x target x camera).
 
 Usage:
-CUDA_VISIBLE_DEVICES=1 python examples/scripts/myscripts/eval_upright_bottle.py \
---checkpoint /proj/vondrick3/sruthi/Appaji/trl/outputs/UprightBottle_20260513_183921/checkpoint-850 \
---success_indices 101-118,120-147 \
---failure_indices 101-118,120-147 \
---compare_interval 2,4,8,16 \
---max_succ_pairs 500 --max_fail_pairs 500 \
---max_pixels 960x540 \
---failure_last_frac 0.9
-
+CUDA_VISIBLE_DEVICES=0 python examples/scripts/myscripts/eval_bag_plate_object_conditioned.py \
+--checkpoint /proj/vondrick3/sruthi/Appaji/trl/outputs/BagPlateObjCond_20260516_151157/checkpoint-1200 \
+--eval_box_indices 18-20 \
+--eval_glass_indices 18-20 \
+--eval_remote_indices 18-20 \
+--max_pixels 960x540
 """
 
 import argparse
@@ -25,7 +22,7 @@ import os
 import random
 import re
 import sys
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -33,14 +30,15 @@ import torch
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from sft_vlm_upright_bottle import (  # noqa: E402
+from sft_vlm_bag_plate_object_conditioned import (  # noqa: E402
+    OBJECT_KINDS,
     SYSTEM_PROMPT,
     USER_PROMPT_TEMPLATE,
-    build_pairs_for_demos,
-    load_upright_bottle_demos,
+    build_pairs_from_csv,
+    load_bag_plate_demos,
     parse_indices,
+    read_matches_csv,
 )
-from sft_vlm_overlay_regression_v2 import TASK_TOKENS  # noqa: E402
 from video_frame_utils import extract_frame  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -52,22 +50,22 @@ SIGNED_INT_RE = re.compile(r"-?\d+")
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", required=True)
-    p.add_argument("--dataset_root", default="/proj/vondrick3/datasets/expert_data_jgd_UprightBottle")
-    p.add_argument("--task_name", default="UprightBottle")
-    p.add_argument("--success_indices", default="51-100")
-    p.add_argument("--failure_indices", default="",
-                   help="comma/range list of failure indices; default empty (no failures in 51-100)")
-    p.add_argument("--compare_interval", default="4,8,12,16")
-    p.add_argument("--sample_interval", type=int, default=4,
-                   help="step through subsampled frames when building pairs")
-    p.add_argument("--failure_last_frac", type=float, default=0.90)
+    p.add_argument("--dataset_root", default="/proj/vondrick3/datasets/expert_data_jgd_bag_plate")
+    p.add_argument(
+        "--matches_csv",
+        default="/proj/vondrick3/datasets/expert_data_jgd_bag_plate/similar_pairs_out_grb/matches.csv",
+    )
+    p.add_argument("--eval_box_indices", default="18-20")
+    p.add_argument("--eval_glass_indices", default="18-20")
+    p.add_argument("--eval_remote_indices", default="18-20")
+    p.add_argument("--pair_sample_step", type=int, default=2,
+                   help="step through last-frac sub-frames when building eval pairs")
+    p.add_argument("--failure_last_frac", type=float, default=0.95)
     p.add_argument("--failure_min_frames", type=int, default=8)
     p.add_argument("--max_pixels", default="960x540",
                    help="WxH, matches training max_pixels")
-    p.add_argument("--max_succ_pairs", type=int, default=400,
-                   help="cap on number of succ_vs_succ pairs to evaluate (0 = no cap)")
-    p.add_argument("--max_fail_pairs", type=int, default=0,
-                   help="cap on number of fail_vs_succ pairs to evaluate (0 = no cap)")
+    p.add_argument("--max_eval_pairs", type=int, default=600,
+                   help="cap on number of eval pairs to evaluate (0 = no cap)")
     p.add_argument("--max_new_tokens", type=int, default=8)
     p.add_argument("--seed", type=int, default=1234)
     p.add_argument("--out_json", default=None,
@@ -84,7 +82,6 @@ def parse_args():
 
 
 def _render_example_panel(ax_left, ax_right, ex, gen_text, pred_ans, correct, target_ans):
-    """Draw two frames into the given matplotlib axes with a colored caption."""
     try:
         f1 = extract_frame(ex["video_path_1"], ex["frame_idx_1"])
         f2 = extract_frame(ex["video_path_2"], ex["frame_idx_2"])
@@ -103,11 +100,10 @@ def _render_example_panel(ax_left, ax_right, ex, gen_text, pred_ans, correct, ta
         color = "#2ecc71" if correct else "#e74c3c"
         verdict = "OK" if correct else "WRONG"
     pred_str = f"{pred_ans}" if pred_ans is not None else f"<unparsed: {gen_text!r}>"
-    ax_left.set_title("frame 1 (earlier label)", fontsize=8, color="#555555")
-    ax_right.set_title("frame 2 (later label)", fontsize=8, color="#555555")
-    # Caption above the left axis with full info
+    ax_left.set_title("frame 1", fontsize=8, color="#555555")
+    ax_right.set_title("frame 2", fontsize=8, color="#555555")
     cap = (
-        f"[{verdict}] GT={target_ans:+d}  Pred={pred_str}  "
+        f"[{verdict}] target={ex.get('target_object','?')}  GT={target_ans:+d}  Pred={pred_str}  "
         f"| {ex.get('bucket','?')}  | {ex.get('demo_id_exact','?')}"
     )
     ax_left.text(
@@ -117,24 +113,25 @@ def _render_example_panel(ax_left, ax_right, ex, gen_text, pred_ans, correct, ta
 
 
 def save_per_example_pngs(records, out_dir, n):
-    """Write up to n individual PNGs (one per pair) into out_dir."""
     out_dir.mkdir(parents=True, exist_ok=True)
     for k, r in enumerate(records[:n]):
         fig, (axL, axR) = plt.subplots(1, 2, figsize=(10, 4))
         _render_example_panel(axL, axR, r["ex"], r["gen"], r["pred_ans"], r["correct"], r["target"])
         verdict_tag = "ok" if r["correct"] else ("unparsed" if r["pred_ans"] is None else "wrong")
-        fname = f"{k:03d}_{verdict_tag}_{r['ex'].get('demo_id_exact','demo')}_{r['ex'].get('bucket','bucket')}.png"
+        fname = (
+            f"{k:03d}_{verdict_tag}_{r['ex'].get('demo_id_exact','demo')}"
+            f"_target-{r['ex'].get('target_object','?')}_{r['ex'].get('camera','?')}.png"
+        )
         fig.tight_layout()
         fig.savefig(out_dir / fname, dpi=130, bbox_inches="tight")
         plt.close(fig)
 
 
 def save_grid(records, out_path, title, max_cells):
-    """Save a grid of example panels (2 axes per example: frame1, frame2)."""
     if not records:
         return
     n = min(len(records), max_cells)
-    n_cols = 2  # 2 examples per row -> 4 image axes per row
+    n_cols = 2
     n_rows = (n + n_cols - 1) // n_cols
     fig, axes = plt.subplots(n_rows, n_cols * 2, figsize=(5 * n_cols * 2, 3.6 * n_rows))
     if n_rows == 1:
@@ -166,7 +163,7 @@ def save_bucket_chart(buckets, out_path, overall_acc):
     ax.axhline(overall_acc, color="#e67e22", linestyle="--", label=f"overall={overall_acc:.3f}")
     ax.axhline(0.5, color="#95a5a6", linestyle=":", label="chance=0.5")
     ax.set_xticks(range(len(keys)))
-    ax.set_xticklabels(keys, rotation=30, ha="right", fontsize=9)
+    ax.set_xticklabels(keys, rotation=30, ha="right", fontsize=8)
     ax.set_ylabel("sign accuracy")
     ax.set_ylim(0, 1.05)
     ax.set_title("Sign accuracy per bucket")
@@ -183,40 +180,49 @@ def save_bucket_chart(buckets, out_path, overall_acc):
 def main():
     args = parse_args()
 
-    if args.task_name not in TASK_TOKENS:
-        raise ValueError(f"Unknown task '{args.task_name}'. Add it to TASK_TOKENS.")
-    task_token = TASK_TOKENS[args.task_name]
+    eval_sets = {
+        "box": set(parse_indices(args.eval_box_indices)),
+        "glass": set(parse_indices(args.eval_glass_indices)),
+        "remote": set(parse_indices(args.eval_remote_indices)),
+    }
 
-    succ_idxs = parse_indices(args.success_indices)
-    fail_idxs = parse_indices(args.failure_indices) if args.failure_indices else []
-    intervals = [int(x) for x in args.compare_interval.split(",")]
+    # Load only the demos referenced by the CSV (the training script does the same).
+    needed = {k: set() for k in OBJECT_KINDS}
+    for kind_a, idx_a, kind_b, idx_b, _rank, _iou in read_matches_csv(args.matches_csv):
+        needed[kind_a].add(idx_a)
+        needed[kind_b].add(idx_b)
+    logger.info("CSV references: " + ", ".join(f"{len(needed[k])} {k}" for k in OBJECT_KINDS))
 
-    successes = load_upright_bottle_demos(args.dataset_root, succ_idxs, "success")
-    failures = load_upright_bottle_demos(args.dataset_root, fail_idxs, "failure") if fail_idxs else []
+    loaded = {
+        k: load_bag_plate_demos(args.dataset_root, sorted(needed[k]), k)
+        for k in OBJECT_KINDS
+    }
+    demos_by_key = {}
+    for k, lst in loaded.items():
+        for d in lst:
+            demos_by_key[(d["kind"], d["idx"])] = d
 
-    pairs = build_pairs_for_demos(
-        successes, failures, intervals, args.sample_interval, task_token,
-        args.failure_last_frac, args.failure_min_frames,
+    _train_pairs, eval_pairs, route_stats = build_pairs_from_csv(
+        args.matches_csv,
+        demos_by_key,
+        eval_sets,
+        args.failure_last_frac,
+        args.failure_min_frames,
+        args.pair_sample_step,
         rng=random.Random(args.seed),
     )
-    logger.info(f"Built {len(pairs)} pairs from {len(successes)} success / {len(failures)} failure demos")
-    logger.info(f"Bucket counts: {Counter(p['bucket'] for p in pairs)}")
+    logger.info(
+        f"Row routing: train={route_stats['n_train_rows']}, eval={route_stats['n_eval_rows']}, "
+        f"missing_demo={route_stats['n_missing_demo']}"
+    )
+    logger.info(f"Built {len(eval_pairs)} eval pairs (train pairs discarded)")
 
     rng = random.Random(args.seed)
-    succ_pairs = [p for p in pairs if not p["bucket"].startswith("fail_vs_succ")]
-    fail_pairs = [p for p in pairs if p["bucket"].startswith("fail_vs_succ")]
-    rng.shuffle(succ_pairs)
-    rng.shuffle(fail_pairs)
-    if args.max_succ_pairs and len(succ_pairs) > args.max_succ_pairs:
-        succ_pairs = succ_pairs[:args.max_succ_pairs]
-    if args.max_fail_pairs and len(fail_pairs) > args.max_fail_pairs:
-        fail_pairs = fail_pairs[:args.max_fail_pairs]
-    pairs = succ_pairs + fail_pairs
-    rng.shuffle(pairs)
+    rng.shuffle(eval_pairs)
+    if args.max_eval_pairs and len(eval_pairs) > args.max_eval_pairs:
+        eval_pairs = eval_pairs[:args.max_eval_pairs]
     logger.info(
-        f"Evaluating {len(pairs)} pairs "
-        f"(succ_vs_succ={len(succ_pairs)} cap={args.max_succ_pairs or 'none'}, "
-        f"fail_vs_succ={len(fail_pairs)} cap={args.max_fail_pairs or 'none'})"
+        f"Evaluating {len(eval_pairs)} pairs (cap={args.max_eval_pairs or 'none'})"
     )
 
     dtype = getattr(torch, args.dtype)
@@ -235,15 +241,16 @@ def main():
         max_pixels=mp_w * mp_h,
     )
 
-    buckets = {}  # bucket -> {correct, total, unparsed}
+    buckets = {}
     qualitative = []
-    records = []  # per-example records for visualization
+    records = []
 
-    for i, ex in enumerate(pairs):
+    for i, ex in enumerate(eval_pairs):
         try:
             bucket = ex.get("bucket", "unknown")
             target_ans = int(ex["correct_answer"])
-            user_text = USER_PROMPT_TEMPLATE.format(task_token=ex.get("task_token", task_token))
+            target_object = ex.get("target_object", "unknown")
+            user_text = USER_PROMPT_TEMPLATE.format(target_object=target_object)
 
             f1 = extract_frame(ex["video_path_1"], ex["frame_idx_1"])
             f2 = extract_frame(ex["video_path_2"], ex["frame_idx_2"])
@@ -298,12 +305,13 @@ def main():
                     "pred_text": gen,
                     "pred_ans": pred_ans,
                     "bucket": bucket,
+                    "target_object": target_object,
                     "demo": ex.get("demo_id_exact", "?"),
                 })
 
             if (i + 1) % 20 == 0:
                 running = sum(b["correct"] for b in buckets.values()) / max(sum(b["total"] for b in buckets.values()), 1)
-                logger.info(f"[{i+1}/{len(pairs)}] running sign_acc={running:.3f}")
+                logger.info(f"[{i+1}/{len(eval_pairs)}] running sign_acc={running:.3f}")
         except Exception as e:
             logger.warning(f"example {i} failed: {e}")
 
@@ -311,25 +319,42 @@ def main():
     correct = sum(b["correct"] for b in buckets.values())
     unparsed = sum(b["unparsed"] for b in buckets.values())
 
-    def _agg(suffix):
-        cs = [b for k, b in buckets.items() if k.endswith(suffix)]
+    def _agg(predicate):
+        cs = [b for k, b in buckets.items() if predicate(k)]
         tot = sum(b["total"] for b in cs)
         cor = sum(b["correct"] for b in cs)
         unp = sum(b["unparsed"] for b in cs)
         return cor / max(tot, 1), unp / max(tot, 1), tot
 
-    cam0_acc, cam0_unp, cam0_n = _agg("_cam0")
-    cam1_acc, cam1_unp, cam1_n = _agg("_cam1")
+    cam0_acc, cam0_unp, cam0_n = _agg(lambda k: k.endswith("_cam0"))
+    cam1_acc, cam1_unp, cam1_n = _agg(lambda k: k.endswith("_cam1"))
+    per_target = {
+        t: _agg(lambda k, t=t: f"target-{t}_" in k) for t in OBJECT_KINDS
+    }
+    per_pair_type = {
+        pt: _agg(lambda k, pt=pt: k.startswith(pt + "_"))
+        for pt in ("box-glass", "box-remote", "glass-remote")
+    }
 
     summary = {
         "checkpoint": args.checkpoint,
-        "success_indices": args.success_indices,
-        "failure_indices": args.failure_indices,
+        "matches_csv": args.matches_csv,
+        "eval_box_indices": args.eval_box_indices,
+        "eval_glass_indices": args.eval_glass_indices,
+        "eval_remote_indices": args.eval_remote_indices,
         "n_evaluated": total,
         "sign_acc_overall": correct / max(total, 1),
         "unparsed_overall": unparsed / max(total, 1),
         "sign_acc_cam0": cam0_acc, "unparsed_cam0": cam0_unp, "n_cam0": cam0_n,
         "sign_acc_cam1": cam1_acc, "unparsed_cam1": cam1_unp, "n_cam1": cam1_n,
+        "per_target": {
+            t: {"sign_acc": acc, "unparsed": unp, "n": n_t}
+            for t, (acc, unp, n_t) in per_target.items()
+        },
+        "per_pair_type": {
+            pt: {"sign_acc": acc, "unparsed": unp, "n": n_pt}
+            for pt, (acc, unp, n_pt) in per_pair_type.items()
+        },
         "per_bucket": {
             k: {
                 "sign_acc": v["correct"] / max(v["total"], 1),
@@ -343,13 +368,17 @@ def main():
 
     logger.info("=" * 60)
     logger.info(f"Held-out eval results (n={total})")
-    logger.info(f"  sign_acc_overall: {summary['sign_acc_overall']:.4f}")
-    logger.info(f"  unparsed_overall: {summary['unparsed_overall']:.4f}")
-    logger.info(f"  sign_acc_cam0:    {cam0_acc:.4f}  (n={cam0_n})")
-    logger.info(f"  sign_acc_cam1:    {cam1_acc:.4f}  (n={cam1_n})")
+    logger.info(f"  sign_acc_overall:    {summary['sign_acc_overall']:.4f}")
+    logger.info(f"  unparsed_overall:    {summary['unparsed_overall']:.4f}")
+    logger.info(f"  sign_acc_cam0:       {cam0_acc:.4f}  (n={cam0_n})")
+    logger.info(f"  sign_acc_cam1:       {cam1_acc:.4f}  (n={cam1_n})")
+    for t, (acc, _unp, n_t) in per_target.items():
+        logger.info(f"  sign_acc_target_{t:<6}: {acc:.4f}  (n={n_t})")
+    for pt, (acc, _unp, n_pt) in per_pair_type.items():
+        logger.info(f"  sign_acc_pair_{pt:<14}: {acc:.4f}  (n={n_pt})")
     logger.info("  per-bucket:")
     for k, v in summary["per_bucket"].items():
-        logger.info(f"    {k:32s}  acc={v['sign_acc']:.4f}  unparsed={v['unparsed']:.4f}  n={v['n']}")
+        logger.info(f"    {k:40s}  acc={v['sign_acc']:.4f}  unparsed={v['unparsed']:.4f}  n={v['n']}")
     logger.info("=" * 60)
 
     if args.out_json:
@@ -357,7 +386,6 @@ def main():
             json.dump(summary, fh, indent=2)
         logger.info(f"Wrote summary to {args.out_json}")
 
-    # ---- Visualizations ----
     viz_dir = Path(args.viz_dir) if args.viz_dir else Path(args.checkpoint) / "heldout_eval_viz"
     viz_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"Writing visualizations to {viz_dir}")
@@ -366,7 +394,6 @@ def main():
     wrong_recs = [r for r in records if (not r["correct"]) and r["pred_ans"] is not None]
     unparsed_recs = [r for r in records if r["pred_ans"] is None]
 
-    # Mixed sampling for the per-example PNGs: balance bucket + correctness
     rng2 = random.Random(args.seed + 1)
     by_key = defaultdict(list)
     for r in records:
@@ -403,31 +430,41 @@ def main():
 
     save_bucket_chart(buckets, viz_dir / "bucket_accuracy.png", summary["sign_acc_overall"])
 
-    # Dump every fail_vs_succ pair as its own PNG, grouped by verdict, so all
-    # failure/success comparisons can be inspected (not just the sampled mix).
-    fvs_recs = [r for r in records if r["bucket"].startswith("fail_vs_succ")]
-    fvs_dir = viz_dir / "fail_vs_succ"
-    for verdict in ("ok", "wrong", "unparsed"):
-        (fvs_dir / verdict).mkdir(parents=True, exist_ok=True)
-    for k, r in enumerate(fvs_recs):
+    # Per-pair-type folders of all per-example PNGs, grouped by verdict.
+    by_pair_type_dir = viz_dir / "by_pair_type"
+    for r in records:
+        pt = r["ex"].get("pair_type", "unknown")
+        if r["pred_ans"] is None:
+            verdict_tag = "unparsed"
+        else:
+            verdict_tag = "ok" if r["correct"] else "wrong"
+        out_d = by_pair_type_dir / pt / verdict_tag
+        out_d.mkdir(parents=True, exist_ok=True)
+    for k, r in enumerate(records):
+        pt = r["ex"].get("pair_type", "unknown")
         if r["pred_ans"] is None:
             verdict_tag = "unparsed"
         else:
             verdict_tag = "ok" if r["correct"] else "wrong"
         fig, (axL, axR) = plt.subplots(1, 2, figsize=(10, 4))
         _render_example_panel(axL, axR, r["ex"], r["gen"], r["pred_ans"], r["correct"], r["target"])
-        fname = f"{k:04d}_{r['ex'].get('demo_id_exact','demo')}_{r['ex'].get('bucket','bucket')}.png"
+        fname = (
+            f"{k:04d}_{r['ex'].get('demo_id_exact','demo')}"
+            f"_target-{r['ex'].get('target_object','?')}_{r['ex'].get('camera','?')}.png"
+        )
         fig.tight_layout()
-        fig.savefig(fvs_dir / verdict_tag / fname, dpi=130, bbox_inches="tight")
+        fig.savefig(by_pair_type_dir / pt / verdict_tag / fname, dpi=130, bbox_inches="tight")
         plt.close(fig)
-    logger.info(f"Saved {len(fvs_recs)} fail_vs_succ per-pair PNGs under {fvs_dir}")
+    logger.info(f"Saved {len(records)} per-pair PNGs under {by_pair_type_dir}")
 
-    # Dump a per-example CSV-ish JSONL for easy grep/inspection
     with open(viz_dir / "predictions.jsonl", "w") as fh:
         for r in records:
             fh.write(json.dumps({
                 "demo": r["ex"].get("demo_id_exact", "?"),
                 "bucket": r["bucket"],
+                "pair_type": r["ex"].get("pair_type", "?"),
+                "target_object": r["ex"].get("target_object", "?"),
+                "camera": r["ex"].get("camera", "?"),
                 "video_path_1": r["ex"]["video_path_1"],
                 "frame_idx_1": r["ex"]["frame_idx_1"],
                 "video_path_2": r["ex"]["video_path_2"],

@@ -13,22 +13,34 @@ Job file format (written atomically by the producer — tmp → rename):
       "task_name": "PnPRedLegoToBrownBowl"
     }
 
-Usage (single GPU):
+Usage (8 GPUs, pairs sharded across all of them with batch=8 per GPU):
 conda activate vlmoverlay
 cd /proj/vondrick3/sruthi/Appaji/trl
-CUDA_VISIBLE_DEVICES=0 python examples/scripts/myscripts/rank_serve.py \
---inbox_dir /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_inbox \
---done_dir  /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_done \
---error_dir /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_errors
 
-Usage (8 GPUs, pairs sharded across all of them with batch=8 per GPU):
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python examples/scripts/myscripts/rank_serve.py \
 --inbox_dir /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_inbox \
 --done_dir  /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_done \
 --error_dir /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_errors \
 --gpu_ids 0,1,2,3,4,5,6,7 --batch_size 8 \
---task_name UprightBottle \
---checkpoint /proj/vondrick3/sruthi/Appaji/trl/outputs/UprightBottle_20260512_230111/checkpoint-1100
+--task_name PushBowl \
+--checkpoint /proj/vondrick3/sruthi/Appaji/trl/outputs/PushBowl_20260515_230044/checkpoint-1050
+
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python examples/scripts/myscripts/rank_serve.py \
+--inbox_dir /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_inbox \
+--done_dir  /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_done \
+--error_dir /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_errors \
+--gpu_ids 0,1,2,3,4,5,6,7 --batch_size 8 \
+--task_name PnPRedLegoToBrownBowl \
+--checkpoint /proj/vondrick3/sruthi/Appaji/trl/outputs/PnPRedLegoToBrownBowl_20260516_121708_moredata_succ_only/checkpoint-700
+
+
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python examples/scripts/myscripts/rank_serve.py \
+--inbox_dir /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_inbox \
+--done_dir  /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_done \
+--error_dir /proj/vondrick3/HunyuanVideo-1.5-train-sruthi/rank_errors \
+--gpu_ids 0,1,2,3,4,5,6,7 --batch_size 8 \
+--task_name Stacking \
+--checkpoint /proj/vondrick3/sruthi/Appaji/trl/outputs/Stacking_20260520_155659_848x480/checkpoint-750
 """
 
 import argparse

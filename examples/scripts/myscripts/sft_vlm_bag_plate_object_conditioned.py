@@ -1,34 +1,29 @@
 """
-Trainer for UprightBottle pairwise progress comparison (two camera views).
+Trainer for BagPlate object-conditioned image ranking (two camera views).
 
-Layout assumed at --dataset_root:
-    <kind>_<N>_<timestamp>.npy            # dict with image_paths_cam0 / image_paths_cam1
-    <kind>_<N>_<timestamp>_frames_cam0/   # frame_000000.jpg ...
-    <kind>_<N>_<timestamp>_frames_cam1/   # frame_000000.jpg ...
-where kind in {"success","failure"}.
+Given a target object name in {"box", "glass", "remote"} and a pair of images,
+the VLM should predict +ANSWER_MAGNITUDE if the second image contains the
+target object and -ANSWER_MAGNITUDE if the first image does. This makes the
+VLM rank which image is closer to the user's specified object type.
 
-Frames are 30 Hz; subsampled by 3 -> 10 Hz.
+Layout assumed at --dataset_root: same as sft_vlm_bag_plate_matched_plates.py.
 
-Pairing:
-- success-vs-success: same demo, later sub-frame = more progress.
-- failure-vs-success: pair the LAST K sub-frames of failure_N (where the
-  failure has clearly happened) against the temporally aligned sub-frames
-  of success_N. K = max(failure_min_frames, round(failure_last_frac * len)).
+`--matches_csv` has columns
+    rank,pair_type,iou,demo_a,demo_b
+with pair_type in {"box-glass","box-remote","glass-remote"}.
 
-For every logical pair, we emit TWO examples - one using cam0 frames and one
-using cam1 frames - so train/eval are balanced 50/50 across camera views and
-each demo's both views become training signal. Each example still feeds the
-model two same-camera images (the prompt template is unchanged).
+Pairing: for each CSV row we take the LAST K sub-frames of each demo
+(K = max(failure_min_frames, round(failure_last_frac * n_sub))) and align
+them index-by-index. For every (sub-frame, camera) we emit TWO examples,
+one conditioned on each of the two object types present in the pair. The
+image order is randomly swapped per example (sign flipped to match).
 
-Inputs are fed as TWO SEPARATE images via the chat template (no side-by-side
-overlay), so each frame uses its own resize budget through the Qwen2.5-VL
-processor.
-
-A PairwiseSignAccuracyCallback runs at every eval step, calls model.generate,
-parses the signed integer, and logs per-bucket sign accuracy plus aggregated
-per-camera accuracy (eval/sign_acc_cam0, eval/sign_acc_cam1).
+Train/eval split is by demo holdout: a row is routed to eval if EITHER demo
+is in the corresponding eval index set, otherwise to train. This guarantees
+the held-out demos never appear in any training pair.
 """
 
+import csv
 import gc
 import glob
 import json
@@ -59,10 +54,7 @@ from trl.trainer.sft_trainer import DataCollatorForVisionLanguageModeling
 
 # Sibling import works regardless of CWD
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from sft_vlm_overlay_regression_v2 import (  # noqa: E402
-    TASK_TOKENS,
-    visualize_dataset,
-)
+from sft_vlm_overlay_regression_v2 import visualize_dataset  # noqa: E402
 from video_frame_utils import extract_frame  # noqa: E402
 
 random.seed(42)
@@ -71,19 +63,24 @@ logger = logging.getLogger(__name__)
 
 SUBSAMPLE = 2  # 30 Hz -> 10 Hz
 
-# Prompts: two separate images, "first" vs "second".
+OBJECT_KINDS = ("box", "glass", "remote")
+VALID_PAIR_TYPES = ("box-glass", "box-remote", "glass-remote")
+
+# Prompts: two separate images, "first" vs "second", conditioned on a target.
 SYSTEM_PROMPT = (
-    "Compare robot task progress. You will see two images. "
-    "Respond with a number: positive if the second image shows more progress, "
-    "negative if the first does."
+    "You will see two images and the name of a target object. "
+    "Respond with a number: positive if the second image shows the robot arm moving above the target "
+    "object, negative if the first image shows the robot arm moving above the target object."
 )
 USER_PROMPT_TEMPLATE = (
-    "Task: {task_token}\n"
-    "Which image shows more task progress (the first or the second)? "
+    "Target object: {target_object}\n"
+    "Which image shows the robot arm moving above the{target_object} (the first or the second)? "
     "Respond with a number from -100 to 100."
 )
 
 ANSWER_MAGNITUDE = 32  # binary +/- this magnitude
+
+DEMO_NAME_RE = re.compile(r"^(box|glass|remote)_(\d+)$")
 
 
 def parse_indices(s: str) -> list:
@@ -100,7 +97,7 @@ def parse_indices(s: str) -> list:
     return sorted(set(out))
 
 
-def load_upright_bottle_demos(root: str, indices: list, kind: str) -> list:
+def load_bag_plate_demos(root: str, indices: list, kind: str) -> list:
     demos = []
     for n in indices:
         matches = sorted(glob.glob(f"{root}/{kind}_{n}_*.npy"))
@@ -135,34 +132,62 @@ def load_upright_bottle_demos(root: str, indices: list, kind: str) -> list:
     return demos
 
 
-def build_pairs_for_demos(
-    successes,
-    failures,
-    intervals,
-    train_step,
-    task_token,
+def read_matches_csv(csv_path: str):
+    """Yield (kind_a, idx_a, kind_b, idx_b, rank, iou) tuples.
+
+    Accepts pair_type in {"box-glass","box-remote","glass-remote"}. The two
+    sides may appear in either order in demo_a/demo_b, as long as the kinds
+    match pair_type.
+    """
+    with open(csv_path, newline="") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            pair_type = row["pair_type"].strip()
+            if pair_type not in VALID_PAIR_TYPES:
+                logger.warning(f"Unknown pair_type {pair_type!r}, skipping row {row}")
+                continue
+            expected = set(pair_type.split("-"))
+            ma = DEMO_NAME_RE.match(row["demo_a"].strip())
+            mb = DEMO_NAME_RE.match(row["demo_b"].strip())
+            if not ma or not mb or {ma.group(1), mb.group(1)} != expected:
+                logger.warning(f"Malformed row, skipping: {row}")
+                continue
+            yield (
+                ma.group(1), int(ma.group(2)),
+                mb.group(1), int(mb.group(2)),
+                int(row["rank"]), float(row["iou"]),
+            )
+
+
+def build_pairs_from_csv(
+    csv_path,
+    demos_by_key,
+    eval_sets,
     failure_last_frac,
     failure_min_frames,
+    pair_sample_step,
     rng=None,
 ):
-    """Build success-vs-success and failure-vs-success pairs for the given demo subsets.
+    """Read matches.csv and emit object-conditioned ranking examples.
 
-    Each emitted example carries video_path/frame_idx for both images, the
-    chat messages, the integer label, and a `bucket` tag for per-bucket eval.
+    For each CSV row pair (kind_a, idx_a, kind_b, idx_b), and for each kept
+    sub-frame index i and each camera, emit 2 examples - one with the target
+    set to kind_a and one with the target set to kind_b - with a random image
+    swap (sign flipped accordingly).
+
+    A row goes to eval if EITHER demo is in the corresponding eval index set.
     """
     rng = rng or random.Random(42)
-    user_prompt = USER_PROMPT_TEMPLATE.format(task_token=task_token)
-    succ_by_idx = {s["idx"]: s for s in successes}
-    out = []
+    train_pairs, eval_pairs = [], []
     CAMERAS = ("cam0", "cam1")
+    stats = {"n_train_rows": 0, "n_eval_rows": 0, "n_missing_demo": 0}
 
-    def emit(v1, f1, v2, f2, ans, kind, demo_id, bucket, camera):
-        out.append({
+    def emit(out_list, v1, f1, v2, f2, ans, target, pair_type, demo_a, demo_b, bucket, camera):
+        user_prompt = USER_PROMPT_TEMPLATE.format(target_object=target)
+        out_list.append({
             "video_path_1": v1, "frame_idx_1": f1,
             "video_path_2": v2, "frame_idx_2": f2,
             "correct_answer": ans,
-            # Prompt-completion format so completion_only_loss can mask
-            # the long constant prefix and only train on the answer tokens.
             "prompt": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
@@ -170,86 +195,86 @@ def build_pairs_for_demos(
             "completion": [
                 {"role": "assistant", "content": str(ans)},
             ],
-            "demo_id": demo_id,
-            "demo_id_exact": f"{kind}_{demo_id}",
-            "demo_success": kind,
+            "demo_id": f"{demo_a}__{demo_b}",
+            "demo_id_exact": f"{demo_a}__{demo_b}",
+            "demo_success": pair_type,
             "bucket": bucket,
             "camera": camera,
-            "job_name": "UprightBottle",
-            "task_token": task_token,
+            "job_name": "BagPlateObjectConditioned",
+            "task_token": f"target={target}",
+            "pair_type": pair_type,
+            "target_object": target,
         })
 
-    # success-vs-success: later frame from same demo shows more progress.
-    for s in successes:
-        sub_max = (s["n_frames"] - 1) // SUBSAMPLE
-        for interval in intervals:
-            if sub_max <= interval:
-                continue
-            offset = rng.randint(0, train_step - 1)
-            count = 0
-            for i1 in range(offset, sub_max - interval, train_step):
-                i2 = i1 + interval
-                f1, f2 = i1 * SUBSAMPLE, i2 * SUBSAMPLE
-                for cam in CAMERAS:
-                    v_path = s[f"video_path_{cam}"]
-                    ans = ANSWER_MAGNITUDE
-                    v1, vf1, v2, vf2 = v_path, f1, v_path, f2
-                    if rng.random() < 0.5:
-                        v1, vf1, v2, vf2 = v2, vf2, v1, vf1
-                        ans = -ans
-                    emit(
-                        v1, vf1, v2, vf2, ans, "success", s["idx"],
-                        f"succ_vs_succ_int{interval}_{cam}", cam,
-                    )
-                count += 1
-            logger.info(f"success_{s['idx']} interval={interval}: {count} pairs x {len(CAMERAS)} cameras")
-
-    # failure-vs-success: last K sub-frames of failure_N vs aligned success_N.
-    for f in failures:
-        s = succ_by_idx.get(f["idx"])
-        if s is None:
-            logger.warning(f"failure_{f['idx']} has no matching success_{f['idx']}, skipping")
+    for kind_a, idx_a, kind_b, idx_b, rank, iou in read_matches_csv(csv_path):
+        demo_a = demos_by_key.get((kind_a, idx_a))
+        demo_b = demos_by_key.get((kind_b, idx_b))
+        if demo_a is None or demo_b is None:
+            stats["n_missing_demo"] += 1
+            logger.warning(
+                f"Row rank={rank}: missing demo on disk "
+                f"({kind_a}_{idx_a}={'OK' if demo_a else 'MISSING'}, "
+                f"{kind_b}_{idx_b}={'OK' if demo_b else 'MISSING'}); skipping"
+            )
             continue
-        f_sub_max = (f["n_frames"] - 1) // SUBSAMPLE
-        s_sub_max = (s["n_frames"] - 1) // SUBSAMPLE
-        n_sub = f_sub_max + 1
+
+        a_eval = idx_a in eval_sets[kind_a]
+        b_eval = idx_b in eval_sets[kind_b]
+        if a_eval or b_eval:
+            out_list = eval_pairs
+            stats["n_eval_rows"] += 1
+        else:
+            out_list = train_pairs
+            stats["n_train_rows"] += 1
+
+        a_sub_max = (demo_a["n_frames"] - 1) // SUBSAMPLE
+        b_sub_max = (demo_b["n_frames"] - 1) // SUBSAMPLE
+        n_sub = min(a_sub_max, b_sub_max) + 1
         if n_sub < 1:
             continue
         k = max(failure_min_frames, int(round(failure_last_frac * n_sub)))
         k = min(k, n_sub)
         last_indices = list(range(n_sub - k, n_sub))
-        offset = rng.randint(0, train_step - 1)
-        kept = last_indices[offset::train_step]
+        offset = rng.randint(0, pair_sample_step - 1) if pair_sample_step > 1 else 0
+        kept = last_indices[offset::pair_sample_step] if pair_sample_step > 1 else last_indices
+
+        pair_type = f"{kind_a}-{kind_b}"
+        demo_a_name = f"{kind_a}_{idx_a}"
+        demo_b_name = f"{kind_b}_{idx_b}"
+
         for i in kept:
-            f_src = i * SUBSAMPLE
-            s_src = min(i, s_sub_max) * SUBSAMPLE
+            a_src = i * SUBSAMPLE
+            b_src = i * SUBSAMPLE
             for cam in CAMERAS:
-                f_path = f[f"video_path_{cam}"]
-                s_path = s[f"video_path_{cam}"]
-                ans = ANSWER_MAGNITUDE
-                v1, vf1, v2, vf2 = f_path, f_src, s_path, s_src
-                if rng.random() < 0.5:
-                    v1, vf1, v2, vf2 = v2, vf2, v1, vf1
-                    ans = -ans
-                emit(
-                    v1, vf1, v2, vf2, ans, "failure", f["idx"],
-                    f"fail_vs_succ_{cam}", cam,
-                )
+                a_path = demo_a[f"video_path_{cam}"]
+                b_path = demo_b[f"video_path_{cam}"]
+                for target in (kind_a, kind_b):
+                    # Default order: (a, b). target=kind_a -> -MAG (target in img1).
+                    #                target=kind_b -> +MAG (target in img2).
+                    ans = -ANSWER_MAGNITUDE if target == kind_a else ANSWER_MAGNITUDE
+                    v1, vf1, v2, vf2 = a_path, a_src, b_path, b_src
+                    if rng.random() < 0.5:
+                        v1, vf1, v2, vf2 = v2, vf2, v1, vf1
+                        ans = -ans
+                    emit(
+                        out_list, v1, vf1, v2, vf2, ans, target,
+                        pair_type, demo_a_name, demo_b_name,
+                        f"{pair_type}_target-{target}_{cam}", cam,
+                    )
+
         logger.info(
-            f"failure_{f['idx']}: n_sub={n_sub}, k={k}, "
-            f"last_range=[{last_indices[0]}..{last_indices[-1]}], "
-            f"emitted {len(kept)} pairs x {len(CAMERAS)} cameras"
+            f"Row rank={rank} ({pair_type}): {demo_a_name} vs {demo_b_name}, "
+            f"n_sub={n_sub}, k={k}, kept={len(kept)} sub-frames x {len(CAMERAS)} cams x 2 targets "
+            f"-> {'eval' if out_list is eval_pairs else 'train'}"
         )
 
-    return out
+    return train_pairs, eval_pairs, stats
 
 
 @dataclass
 class TwoImageCollator(DataCollatorForVisionLanguageModeling):
     """DataCollatorForVisionLanguageModeling that resolves two video frames per
-    example and provides them as a list of two PIL images. The base class's
-    prepare_multimodal_messages will inject both image placeholders into the
-    first user message automatically.
+    example and provides them as a list of two PIL images.
     """
 
     def _collate_language_modeling(self, examples):
@@ -265,10 +290,6 @@ class TwoImageCollator(DataCollatorForVisionLanguageModeling):
             f2 = extract_frame(example["video_path_2"], example["frame_idx_2"])
             example["images"] = [f1, f2]
         output = super()._collate_prompt_completion(examples)
-        # TRL's _collate_prompt_completion concatenates prompt+completion
-        # input_ids/attention_mask but leaves Qwen2.5-VL's per-token
-        # `mm_token_type_ids` at the prompt length, which crashes
-        # get_rope_index. Append zeros (text type) for the completion.
         if "mm_token_type_ids" in output:
             mm = output["mm_token_type_ids"]
             seq_len = output["input_ids"].shape[1]
@@ -286,8 +307,7 @@ class TwoImageCollator(DataCollatorForVisionLanguageModeling):
 class PairwiseSignAccuracyCallback(TrainerCallback):
     """Run model.generate on a sample of the eval dataset, parse the signed
     integer in each response, and log per-bucket sign accuracy + a few
-    qualitative examples. Distributed-aware: each rank handles its slice and
-    counts are aggregated via dist.all_gather_object.
+    qualitative examples. Distributed-aware.
     """
 
     SIGNED_INT_RE = re.compile(r"-?\d+")
@@ -312,7 +332,6 @@ class PairwiseSignAccuracyCallback(TrainerCallback):
         except Exception:
             world, rank = 1, 0
 
-        # Reproducible subset that doesn't depend on step (so trends are comparable).
         rng = random.Random(1234)
         all_indices = list(range(len(self.eval_dataset)))
         rng.shuffle(all_indices)
@@ -320,7 +339,7 @@ class PairwiseSignAccuracyCallback(TrainerCallback):
         all_indices = all_indices[:n]
 
         my_indices = all_indices[rank::world]
-        buckets = {}  # bucket -> {correct, total, unparsed}
+        buckets = {}
         qualitative = []
 
         was_training = model.training
@@ -331,8 +350,8 @@ class PairwiseSignAccuracyCallback(TrainerCallback):
                     ex = self.eval_dataset[i]
                     bucket = ex.get("bucket", "unknown")
                     target_ans = int(ex["correct_answer"])
-                    task_token = ex.get("task_token", "[UNKNOWN]")
-                    user_text = USER_PROMPT_TEMPLATE.format(task_token=task_token)
+                    target_object = ex.get("target_object", "unknown")
+                    user_text = USER_PROMPT_TEMPLATE.format(target_object=target_object)
 
                     f1 = extract_frame(ex["video_path_1"], ex["frame_idx_1"])
                     f2 = extract_frame(ex["video_path_2"], ex["frame_idx_2"])
@@ -380,6 +399,7 @@ class PairwiseSignAccuracyCallback(TrainerCallback):
                             "target": target_ans,
                             "pred_text": gen,
                             "bucket": bucket,
+                            "target_object": target_object,
                             "demo": ex.get("demo_id_exact", "?"),
                         })
                 except Exception as e:
@@ -405,23 +425,26 @@ class PairwiseSignAccuracyCallback(TrainerCallback):
             unparsed = sum(b["unparsed"] for b in buckets.values())
             overall = correct / max(total, 1)
 
-            # Per-camera aggregates: bucket names end with "_cam0" / "_cam1".
-            def _agg(suffix):
-                cs = [b for k, b in buckets.items() if k.endswith(suffix)]
+            def _agg(predicate):
+                cs = [b for k, b in buckets.items() if predicate(k)]
                 tot = sum(b["total"] for b in cs)
                 cor = sum(b["correct"] for b in cs)
                 unp = sum(b["unparsed"] for b in cs)
                 return cor / max(tot, 1), unp / max(tot, 1), tot
-            cam0_acc, cam0_unp, cam0_n = _agg("_cam0")
-            cam1_acc, cam1_unp, cam1_n = _agg("_cam1")
+            cam0_acc, cam0_unp, cam0_n = _agg(lambda k: k.endswith("_cam0"))
+            cam1_acc, cam1_unp, cam1_n = _agg(lambda k: k.endswith("_cam1"))
+            per_target = {
+                t: _agg(lambda k, t=t: f"target-{t}_" in k) for t in OBJECT_KINDS
+            }
 
-            # Inject into Trainer's metrics dict so metric_for_best_model can find it.
             metrics = kwargs.get("metrics")
             if metrics is not None:
                 metrics["eval_sign_acc_overall"] = overall
                 metrics["eval_unparsed_overall"] = unparsed / max(total, 1)
                 metrics["eval_sign_acc_cam0"] = cam0_acc
                 metrics["eval_sign_acc_cam1"] = cam1_acc
+                for t, (acc, _unp, _n) in per_target.items():
+                    metrics[f"eval_sign_acc_target_{t}"] = acc
 
             if rank == 0:
                 logs = {
@@ -434,6 +457,10 @@ class PairwiseSignAccuracyCallback(TrainerCallback):
                     "eval/n_cam0": cam0_n,
                     "eval/n_cam1": cam1_n,
                 }
+                for t, (acc, unp, n_t) in per_target.items():
+                    logs[f"eval/sign_acc_target_{t}"] = acc
+                    logs[f"eval/unparsed_target_{t}"] = unp
+                    logs[f"eval/n_target_{t}"] = n_t
                 for k in sorted(buckets):
                     b = buckets[k]
                     logs[f"eval/sign_acc_{k}"] = b["correct"] / max(b["total"], 1)
@@ -460,98 +487,88 @@ class PairwiseSignAccuracyCallback(TrainerCallback):
 
 
 @dataclass
-class UprightBottleArgs:
-    dataset_root: str = "/proj/vondrick3/datasets/expert_data_jgd_UprightBottle"
-    failure_indices: str = "101-118,120"
-    success_indices: str = "0-1,3-120"
-    eval_failure_indices: str = "118,120"
-    eval_success_indices: str = "118,120"
-    compare_interval: str = "4,8,12,16"
-    train_sample_interval: int = 4
-    failure_last_frac: float = 0.25
+class BagPlateArgs:
+    dataset_root: str = "/proj/vondrick3/datasets/expert_data_jgd_bag_plate"
+    matches_csv: str = "/proj/vondrick3/datasets/expert_data_jgd_bag_plate/similar_pairs_out_v1/matches.csv"
+    eval_box_indices: str = "18-20"
+    eval_glass_indices: str = "18-20"
+    eval_remote_indices: str = "18-20"
+    pair_sample_step: int = 2
+    failure_last_frac: float = 0.95
     failure_min_frames: int = 8
     eval_max_pairs: int = 200
     just_visualize: bool = False
-    task_name: str = "UprightBottle"
     max_pixels: str = "640x360"  # WxH; processor budget per image
-    balance_fail_vs_succ: bool = False  # if True, replicate fail_vs_succ train pairs so their count matches succ_vs_succ
 
 
 if __name__ == "__main__":
-    parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig, UprightBottleArgs))
+    parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig, BagPlateArgs))
     script_args, training_args, model_args, cfg = parser.parse_args_and_config()
     training_args.max_length = None
     training_args.remove_unused_columns = False
     training_args.load_best_model_at_end = True
     training_args.metric_for_best_model = "eval_sign_acc_overall"
     training_args.greater_is_better = True
-    # Without this the loss averages over ~700 prompt+vision tokens vs ~3
-    # answer tokens, the prefix gets memorized, and the model collapses to a
-    # constant output at generation. Force loss only on the assistant
-    # completion tokens (requires prompt-completion dataset format).
     training_args.completion_only_loss = True
 
-    intervals = [int(x) for x in cfg.compare_interval.split(",")]
-    if cfg.task_name not in TASK_TOKENS:
-        raise ValueError(f"Unknown task '{cfg.task_name}'. Add it to TASK_TOKENS.")
-    task_token = TASK_TOKENS[cfg.task_name]
+    eval_sets = {
+        "box": set(parse_indices(cfg.eval_box_indices)),
+        "glass": set(parse_indices(cfg.eval_glass_indices)),
+        "remote": set(parse_indices(cfg.eval_remote_indices)),
+    }
 
-    succ_idxs = parse_indices(cfg.success_indices)
-    fail_idxs = parse_indices(cfg.failure_indices)
-    eval_succ_set = set(parse_indices(cfg.eval_success_indices))
-    eval_fail_set = set(parse_indices(cfg.eval_failure_indices))
-
-    successes = load_upright_bottle_demos(cfg.dataset_root, succ_idxs, "success")
-    failures = load_upright_bottle_demos(cfg.dataset_root, fail_idxs, "failure")
-
-    train_succ = [s for s in successes if s["idx"] not in eval_succ_set]
-    eval_succ = [s for s in successes if s["idx"] in eval_succ_set]
-    train_fail = [f for f in failures if f["idx"] not in eval_fail_set]
-    eval_fail = [f for f in failures if f["idx"] in eval_fail_set]
+    # Collect all demo indices referenced by the CSV, then load just those demos.
+    needed = {k: set() for k in OBJECT_KINDS}
+    for kind_a, idx_a, kind_b, idx_b, _rank, _iou in read_matches_csv(cfg.matches_csv):
+        needed[kind_a].add(idx_a)
+        needed[kind_b].add(idx_b)
     logger.info(
-        f"Demo split -> train: {len(train_succ)} succ, {len(train_fail)} fail; "
-        f"eval: {len(eval_succ)} succ, {len(eval_fail)} fail"
+        f"CSV references: " + ", ".join(f"{len(needed[k])} {k}" for k in OBJECT_KINDS)
     )
 
-    train_pairs = build_pairs_for_demos(
-        train_succ, train_fail, intervals, cfg.train_sample_interval, task_token,
-        cfg.failure_last_frac, cfg.failure_min_frames,
+    loaded = {
+        k: load_bag_plate_demos(cfg.dataset_root, sorted(needed[k]), k)
+        for k in OBJECT_KINDS
+    }
+
+    demos_by_key = {}
+    for k, lst in loaded.items():
+        for d in lst:
+            demos_by_key[(d["kind"], d["idx"])] = d
+
+    train_pairs, eval_pairs, route_stats = build_pairs_from_csv(
+        cfg.matches_csv,
+        demos_by_key,
+        eval_sets,
+        cfg.failure_last_frac,
+        cfg.failure_min_frames,
+        cfg.pair_sample_step,
         rng=random.Random(42),
     )
-    eval_pairs = build_pairs_for_demos(
-        eval_succ, eval_fail, intervals, cfg.train_sample_interval, task_token,
-        cfg.failure_last_frac, cfg.failure_min_frames,
-        rng=random.Random(43),
+    logger.info(
+        f"Row routing: train={route_stats['n_train_rows']}, eval={route_stats['n_eval_rows']}, "
+        f"missing_demo={route_stats['n_missing_demo']}"
     )
     logger.info(f"Pair counts -> train: {len(train_pairs)}, eval: {len(eval_pairs)}")
 
-    if cfg.balance_fail_vs_succ:
-        succ_pairs = [p for p in train_pairs if p["bucket"] != "fail_vs_succ"]
-        fail_pairs = [p for p in train_pairs if p["bucket"] == "fail_vs_succ"]
-        if fail_pairs and succ_pairs:
-            reps = len(succ_pairs) // len(fail_pairs)
-            remainder = len(succ_pairs) - reps * len(fail_pairs)
-            balance_rng = random.Random(44)
-            balanced_fail = fail_pairs * reps + balance_rng.sample(fail_pairs, remainder)
-            train_pairs = succ_pairs + balanced_fail
-            balance_rng.shuffle(train_pairs)
-            logger.info(
-                f"Balanced fail_vs_succ: {len(fail_pairs)} unique -> {len(balanced_fail)} "
-                f"after replication ({reps}x + {remainder} extra) to match {len(succ_pairs)} succ_vs_succ pairs. "
-                f"New train total: {len(train_pairs)}"
-            )
-        else:
-            logger.warning("balance_fail_vs_succ requested but one bucket is empty; skipping.")
-
-    train_demos = {(p["demo_success"], p["demo_id"]) for p in train_pairs}
-    eval_demos = {(p["demo_success"], p["demo_id"]) for p in eval_pairs}
-    overlap = train_demos & eval_demos
-    if overlap:
-        raise RuntimeError(f"Train/eval demo overlap detected: {overlap}")
-    logger.info(f"Train demos: {sorted(train_demos)}")
-    logger.info(f"Eval demos:  {sorted(eval_demos)}")
+    # Held-out demos (those in any eval_*_indices set) must NEVER appear in
+    # train rows. Cross-check via the video paths embedded in each pair.
+    held_out = set()
+    for k in OBJECT_KINDS:
+        held_out |= {(k, i) for i in eval_sets[k]}
+    train_demo_keys = set()
+    for p in train_pairs:
+        for vp in (p["video_path_1"], p["video_path_2"]):
+            base = os.path.basename(vp)
+            m = re.match(r"^(box|glass|remote)_(\d+)_", base)
+            if m:
+                train_demo_keys.add((m.group(1), int(m.group(2))))
+    leaks = train_demo_keys & held_out
+    if leaks:
+        raise RuntimeError(f"Held-out demos leaked into train: {sorted(leaks)}")
     logger.info(f"Train bucket counts: {Counter(p['bucket'] for p in train_pairs)}")
     logger.info(f"Eval bucket counts:  {Counter(p['bucket'] for p in eval_pairs)}")
+    logger.info(f"Train answer sign balance: {Counter(int(p['correct_answer'] > 0) for p in train_pairs)}")
 
     rng = random.Random(42)
     rng.shuffle(train_pairs)
@@ -612,8 +629,6 @@ if __name__ == "__main__":
             processor=old.processor,
             max_length=old.max_length,
             completion_only_loss=old.completion_only_loss,
-            # _collate_prompt_completion raises NotImplementedError if this
-            # is set; force-disable since we route through that path.
             pad_to_multiple_of=None,
         )
     if eval_ds is not None:
@@ -623,7 +638,6 @@ if __name__ == "__main__":
             n_qualitative=3,
         ))
 
-    # Auto-resume if output_dir already contains a checkpoint-* directory.
     has_ckpt = os.path.isdir(training_args.output_dir) and any(
         d.startswith("checkpoint-") and os.path.isdir(os.path.join(training_args.output_dir, d))
         for d in os.listdir(training_args.output_dir)

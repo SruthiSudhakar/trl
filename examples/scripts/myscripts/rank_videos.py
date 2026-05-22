@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CHECKPOINT = (
     "/proj/vondrick3/sruthi/Appaji/trl/outputs/"
-    "PnPRedLegoToBrownBowl_20260508_220901_moredata_balance_si2/checkpoint-1750"
+    "PushBowl_20260515_230044/checkpoint-1050"
 )
 
 SIGNED_INT_RE = re.compile(r"-?\d+")

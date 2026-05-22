@@ -1,5 +1,5 @@
 """
-Trainer for UprightBottle pairwise progress comparison (two camera views).
+Trainer for Stacking pairwise progress comparison (two camera views).
 
 Layout assumed at --dataset_root:
     <kind>_<N>_<timestamp>.npy            # dict with image_paths_cam0 / image_paths_cam1
@@ -7,7 +7,7 @@ Layout assumed at --dataset_root:
     <kind>_<N>_<timestamp>_frames_cam1/   # frame_000000.jpg ...
 where kind in {"success","failure"}.
 
-Frames are 30 Hz; subsampled by 3 -> 10 Hz.
+Frames are 30 Hz; subsampled by 2 -> 15 Hz.
 
 Pairing:
 - success-vs-success: same demo, later sub-frame = more progress.
@@ -69,7 +69,7 @@ random.seed(42)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-SUBSAMPLE = 2  # 30 Hz -> 10 Hz
+SUBSAMPLE = 2  # 30 Hz -> 15 Hz
 
 # Prompts: two separate images, "first" vs "second".
 SYSTEM_PROMPT = (
@@ -100,7 +100,7 @@ def parse_indices(s: str) -> list:
     return sorted(set(out))
 
 
-def load_upright_bottle_demos(root: str, indices: list, kind: str) -> list:
+def load_stacking_demos(root: str, indices: list, kind: str) -> list:
     demos = []
     for n in indices:
         matches = sorted(glob.glob(f"{root}/{kind}_{n}_*.npy"))
@@ -175,7 +175,7 @@ def build_pairs_for_demos(
             "demo_success": kind,
             "bucket": bucket,
             "camera": camera,
-            "job_name": "UprightBottle",
+            "job_name": "Stacking",
             "task_token": task_token,
         })
 
@@ -460,25 +460,25 @@ class PairwiseSignAccuracyCallback(TrainerCallback):
 
 
 @dataclass
-class UprightBottleArgs:
-    dataset_root: str = "/proj/vondrick3/datasets/expert_data_jgd_UprightBottle"
-    failure_indices: str = "101-118,120"
-    success_indices: str = "0-1,3-120"
-    eval_failure_indices: str = "118,120"
-    eval_success_indices: str = "118,120"
+class StackingArgs:
+    dataset_root: str = "/proj/vondrick3/datasets/expert_data_jgd_stacking"
+    failure_indices: str = "1-7,9-12,14,18,20-25,27-30,32-34,36-39,41-43,46-50"
+    success_indices: str = "1-50"
+    eval_failure_indices: str = "48-50"
+    eval_success_indices: str = "48-50"
     compare_interval: str = "4,8,12,16"
     train_sample_interval: int = 4
     failure_last_frac: float = 0.25
     failure_min_frames: int = 8
     eval_max_pairs: int = 200
     just_visualize: bool = False
-    task_name: str = "UprightBottle"
+    task_name: str = "Stacking"
     max_pixels: str = "640x360"  # WxH; processor budget per image
     balance_fail_vs_succ: bool = False  # if True, replicate fail_vs_succ train pairs so their count matches succ_vs_succ
 
 
 if __name__ == "__main__":
-    parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig, UprightBottleArgs))
+    parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig, StackingArgs))
     script_args, training_args, model_args, cfg = parser.parse_args_and_config()
     training_args.max_length = None
     training_args.remove_unused_columns = False
@@ -501,8 +501,8 @@ if __name__ == "__main__":
     eval_succ_set = set(parse_indices(cfg.eval_success_indices))
     eval_fail_set = set(parse_indices(cfg.eval_failure_indices))
 
-    successes = load_upright_bottle_demos(cfg.dataset_root, succ_idxs, "success")
-    failures = load_upright_bottle_demos(cfg.dataset_root, fail_idxs, "failure")
+    successes = load_stacking_demos(cfg.dataset_root, succ_idxs, "success")
+    failures = load_stacking_demos(cfg.dataset_root, fail_idxs, "failure")
 
     train_succ = [s for s in successes if s["idx"] not in eval_succ_set]
     eval_succ = [s for s in successes if s["idx"] in eval_succ_set]
@@ -563,12 +563,21 @@ if __name__ == "__main__":
     except Exception:
         rank = 0
 
+    mp_w, mp_h = (int(x) for x in cfg.max_pixels.lower().split("x"))
+    max_pixels_budget = mp_w * mp_h
+
     if rank == 0:
         try:
             if train_pairs:
-                visualize_dataset(train_pairs, training_args.output_dir, split_name="train", num_examples=20)
+                visualize_dataset(
+                    train_pairs, training_args.output_dir, split_name="train",
+                    num_examples=20, max_pixels=max_pixels_budget,
+                )
             if eval_pairs:
-                visualize_dataset(eval_pairs, training_args.output_dir, split_name="eval", num_examples=20)
+                visualize_dataset(
+                    eval_pairs, training_args.output_dir, split_name="eval",
+                    num_examples=20, max_pixels=max_pixels_budget,
+                )
         except Exception as e:
             logger.warning(f"Visualization failed: {e}")
 
@@ -592,11 +601,10 @@ if __name__ == "__main__":
         device_map=get_kbit_device_map() if quant is not None else None,
         quantization_config=quant,
     )
-    mp_w, mp_h = (int(x) for x in cfg.max_pixels.lower().split("x"))
     processor = AutoProcessor.from_pretrained(
         model_args.model_name_or_path,
         trust_remote_code=model_args.trust_remote_code,
-        max_pixels=mp_w * mp_h,
+        max_pixels=max_pixels_budget,
     )
 
     trainer = SFTTrainer(

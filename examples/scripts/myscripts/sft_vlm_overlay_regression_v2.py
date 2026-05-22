@@ -191,6 +191,9 @@ TASK_TOKENS = {
     "CleanLitterBox": "[CLEAN_LITTERBOX]",
     "CutAppleIntoSlices": "[CUT_APPLE]",
     "UprightBottle": "[UPRIGHT_BOTTLE]",
+    "BagPlate": "[BAG_PLATE]",
+    "PushBowl": "[PUSH_BOWL]",
+    "Stacking": "[STACKING]",
 }
 
 SYSTEM_PROMPT = "Compare robot task progress. Respond with a number: positive if right image shows more progress, negative if less."
@@ -579,13 +582,14 @@ def build_frame_pairs(
 # Dataset Visualization
 # ============================================================================
 
-def visualize_dataset(combined_data, output_dir, split_name="train", num_examples=20):
+def visualize_dataset(combined_data, output_dir, split_name="train", num_examples=20, max_pixels=None):
     """
     Create statistics plots and sample overlay images for the dataset.
 
     Saves to {output_dir}/dataset_viz/:
       - dataset_statistics_{split}.png: answer distribution, demo type, per-demo counts, per-task counts
       - sample_overlays_{split}.png: grid of example side-by-side overlays with metadata
+      - vlm_view_{split}.png: same samples rendered at the post-`smart_resize` resolution the VLM actually sees (only if `max_pixels` is provided).
       - dataset_stats_{split}.json: machine-readable statistics
 
     Args:
@@ -593,6 +597,9 @@ def visualize_dataset(combined_data, output_dir, split_name="train", num_example
         output_dir: Directory to save outputs.
         split_name: Label for the split (e.g., "train", "val").
         num_examples: Number of sample overlay images to render.
+        max_pixels: Qwen2.5-VL processor pixel budget per image (H*W). If set,
+            an additional `vlm_view_{split}.png` is written showing each sampled
+            frame after `smart_resize` (28-aligned, aspect-ratio-preserving).
     """
     if len(combined_data) == 0:
         logger.warning("No data to visualize")
@@ -755,6 +762,66 @@ def visualize_dataset(combined_data, output_dir, split_name="train", num_example
     plt.savefig(detailed_path, dpi=150, bbox_inches="tight")
     plt.close()
     logger.info(f"Saved detailed examples to {detailed_path}")
+
+    # ---- Figure 4: What the VLM actually sees (post smart_resize) ----
+    # Mirror Qwen2.5-VL's image processor: smart_resize snaps H,W to multiples
+    # of 28 (patch_size*merge_size) while preserving aspect ratio, bounded by
+    # max_pixels. The result is the exact pixel buffer the model is fed.
+    if max_pixels is not None:
+        try:
+            from transformers.models.qwen2_vl.image_processing_qwen2_vl import smart_resize
+        except Exception as e:
+            logger.warning(f"Could not import smart_resize for VLM view: {e}")
+        else:
+            n_vlm = min(num_examples, len(sampled_indices))
+            n_cols_v = 2  # frame1 | frame2
+            fig = plt.figure(figsize=(6 * n_cols_v, 3 * n_vlm))
+            for row_idx in range(n_vlm):
+                item = combined_data[sampled_indices[row_idx]]
+                try:
+                    f1 = extract_frame(item["video_path_1"], item["frame_idx_1"])
+                    f2 = extract_frame(item["video_path_2"], item["frame_idx_2"])
+                    h1_new, w1_new = smart_resize(f1.height, f1.width, max_pixels=max_pixels)
+                    h2_new, w2_new = smart_resize(f2.height, f2.width, max_pixels=max_pixels)
+                    v1 = f1.resize((w1_new, h1_new), Image.BICUBIC)
+                    v2 = f2.resize((w2_new, h2_new), Image.BICUBIC)
+                except Exception as e:
+                    v1 = v2 = None
+                    h1_new = w1_new = h2_new = w2_new = 0
+                    orig1 = orig2 = ""
+                    err = str(e)
+                else:
+                    orig1 = f"{f1.width}x{f1.height}"
+                    orig2 = f"{f2.width}x{f2.height}"
+                    err = ""
+
+                ax1 = fig.add_subplot(n_vlm, 2, row_idx * 2 + 1)
+                if v1 is not None:
+                    ax1.imshow(v1, interpolation="nearest")
+                elif err:
+                    ax1.text(0.5, 0.5, err, ha="center", va="center", transform=ax1.transAxes)
+                ax1.axis("off")
+                ax1.set_title(f"frame_1: {orig1} -> {w1_new}x{h1_new}", fontsize=9)
+
+                ax2 = fig.add_subplot(n_vlm, 2, row_idx * 2 + 2)
+                if v2 is not None:
+                    ax2.imshow(v2, interpolation="nearest")
+                ax2.axis("off")
+                answer = item.get("correct_answer", "?")
+                ax2.set_title(
+                    f"frame_2: {orig2} -> {w2_new}x{h2_new} | ans={answer}",
+                    fontsize=9,
+                )
+
+            plt.suptitle(
+                f"VLM view ({split_name}) - smart_resize @ max_pixels={max_pixels}",
+                fontsize=12, fontweight="bold",
+            )
+            plt.tight_layout()
+            vlm_path = viz_dir / f"vlm_view_{split_name}.png"
+            plt.savefig(vlm_path, dpi=150, bbox_inches="tight")
+            plt.close()
+            logger.info(f"Saved VLM view to {vlm_path}")
 
     # ---- Save JSON stats ----
     stats_summary = {

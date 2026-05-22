@@ -1,5 +1,5 @@
 """
-Trainer for UprightBottle pairwise progress comparison (two camera views).
+Trainer for PushBowl pairwise progress comparison (two camera views).
 
 Layout assumed at --dataset_root:
     <kind>_<N>_<timestamp>.npy            # dict with image_paths_cam0 / image_paths_cam1
@@ -100,7 +100,7 @@ def parse_indices(s: str) -> list:
     return sorted(set(out))
 
 
-def load_upright_bottle_demos(root: str, indices: list, kind: str) -> list:
+def load_push_bowl_demos(root: str, indices: list, kind: str) -> list:
     demos = []
     for n in indices:
         matches = sorted(glob.glob(f"{root}/{kind}_{n}_*.npy"))
@@ -175,7 +175,7 @@ def build_pairs_for_demos(
             "demo_success": kind,
             "bucket": bucket,
             "camera": camera,
-            "job_name": "UprightBottle",
+            "job_name": "PushBowl",
             "task_token": task_token,
         })
 
@@ -460,25 +460,25 @@ class PairwiseSignAccuracyCallback(TrainerCallback):
 
 
 @dataclass
-class UprightBottleArgs:
-    dataset_root: str = "/proj/vondrick3/datasets/expert_data_jgd_UprightBottle"
-    failure_indices: str = "101-118,120"
-    success_indices: str = "0-1,3-120"
-    eval_failure_indices: str = "118,120"
-    eval_success_indices: str = "118,120"
+class PushBowlArgs:
+    dataset_root: str = "/proj/vondrick3/datasets/expert_data_jgd_push_bowl"
+    failure_indices: str = "1-8"
+    success_indices: str = "1-27"
+    eval_failure_indices: str = "9-11"
+    eval_success_indices: str = "28-30"
     compare_interval: str = "4,8,12,16"
     train_sample_interval: int = 4
     failure_last_frac: float = 0.25
     failure_min_frames: int = 8
     eval_max_pairs: int = 200
     just_visualize: bool = False
-    task_name: str = "UprightBottle"
+    task_name: str = "PushBowl"
     max_pixels: str = "640x360"  # WxH; processor budget per image
     balance_fail_vs_succ: bool = False  # if True, replicate fail_vs_succ train pairs so their count matches succ_vs_succ
 
 
 if __name__ == "__main__":
-    parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig, UprightBottleArgs))
+    parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig, PushBowlArgs))
     script_args, training_args, model_args, cfg = parser.parse_args_and_config()
     training_args.max_length = None
     training_args.remove_unused_columns = False
@@ -501,8 +501,8 @@ if __name__ == "__main__":
     eval_succ_set = set(parse_indices(cfg.eval_success_indices))
     eval_fail_set = set(parse_indices(cfg.eval_failure_indices))
 
-    successes = load_upright_bottle_demos(cfg.dataset_root, succ_idxs, "success")
-    failures = load_upright_bottle_demos(cfg.dataset_root, fail_idxs, "failure")
+    successes = load_push_bowl_demos(cfg.dataset_root, succ_idxs, "success")
+    failures = load_push_bowl_demos(cfg.dataset_root, fail_idxs, "failure")
 
     train_succ = [s for s in successes if s["idx"] not in eval_succ_set]
     eval_succ = [s for s in successes if s["idx"] in eval_succ_set]

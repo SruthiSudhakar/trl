@@ -1,21 +1,29 @@
 """
-Held-out eval for UprightBottle SFT checkpoint.
+Held-out eval for Stacking SFT checkpoint.
 
-Builds success-vs-success pairs from a heldout set of demo indices (default
-51-100, which were not in training or eval), runs model.generate, parses the
-signed integer answer, and reports sign accuracy overall + per bucket
-(interval x camera).
+Builds success-vs-success and (optionally) failure-vs-success pairs from a
+held-out set of demo indices (default 48-50, which were held out from training
+in launch_stacking.sh), runs model.generate, parses the signed integer answer,
+and reports sign accuracy overall + per bucket (interval x camera).
 
 Usage:
-CUDA_VISIBLE_DEVICES=1 python examples/scripts/myscripts/eval_upright_bottle.py \
---checkpoint /proj/vondrick3/sruthi/Appaji/trl/outputs/UprightBottle_20260513_183921/checkpoint-850 \
---success_indices 101-118,120-147 \
---failure_indices 101-118,120-147 \
---compare_interval 2,4,8,16 \
+CUDA_VISIBLE_DEVICES=1 python examples/scripts/myscripts/eval_stacking.py \
+--checkpoint /proj/vondrick3/sruthi/Appaji/trl/outputs/Stacking_20260520_150251/checkpoint-800 \
+--success_indices 48-50 \
+--failure_indices 48-50 \
+--compare_interval 3,4,8,12,16 \
 --max_succ_pairs 500 --max_fail_pairs 500 \
 --max_pixels 960x540 \
---failure_last_frac 0.9
+--failure_last_frac 0.95
 
+CUDA_VISIBLE_DEVICES=2 python examples/scripts/myscripts/eval_stacking.py \
+--checkpoint /proj/vondrick3/sruthi/Appaji/trl/outputs/Stacking_20260520_155659_848x480/checkpoint-750 \
+--success_indices 48-50 \
+--failure_indices 48-50 \
+--compare_interval 3,4,8,12,16 \
+--max_succ_pairs 500 --max_fail_pairs 500 \
+--max_pixels 848x480 \
+--failure_last_frac 0.95
 """
 
 import argparse
@@ -33,11 +41,11 @@ import torch
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from sft_vlm_upright_bottle import (  # noqa: E402
+from sft_vlm_stacking import (  # noqa: E402
     SYSTEM_PROMPT,
     USER_PROMPT_TEMPLATE,
     build_pairs_for_demos,
-    load_upright_bottle_demos,
+    load_stacking_demos,
     parse_indices,
 )
 from sft_vlm_overlay_regression_v2 import TASK_TOKENS  # noqa: E402
@@ -52,21 +60,21 @@ SIGNED_INT_RE = re.compile(r"-?\d+")
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", required=True)
-    p.add_argument("--dataset_root", default="/proj/vondrick3/datasets/expert_data_jgd_UprightBottle")
-    p.add_argument("--task_name", default="UprightBottle")
-    p.add_argument("--success_indices", default="51-100")
-    p.add_argument("--failure_indices", default="",
-                   help="comma/range list of failure indices; default empty (no failures in 51-100)")
-    p.add_argument("--compare_interval", default="4,8,12,16")
-    p.add_argument("--sample_interval", type=int, default=4,
-                   help="step through subsampled frames when building pairs")
-    p.add_argument("--failure_last_frac", type=float, default=0.90)
+    p.add_argument("--dataset_root", default="/proj/vondrick3/datasets/expert_data_jgd_stacking")
+    p.add_argument("--task_name", default="Stacking")
+    p.add_argument("--success_indices", default="48-50")
+    p.add_argument("--failure_indices", default="48-50",
+                   help="comma/range list of failure indices for held-out eval")
+    p.add_argument("--compare_interval", default="3,4,8,12,16")
+    p.add_argument("--sample_interval", type=int, default=2,
+                   help="step through subsampled frames when building pairs (matches train_sample_interval)")
+    p.add_argument("--failure_last_frac", type=float, default=0.95)
     p.add_argument("--failure_min_frames", type=int, default=8)
-    p.add_argument("--max_pixels", default="960x540",
+    p.add_argument("--max_pixels", default="848x480",
                    help="WxH, matches training max_pixels")
     p.add_argument("--max_succ_pairs", type=int, default=400,
                    help="cap on number of succ_vs_succ pairs to evaluate (0 = no cap)")
-    p.add_argument("--max_fail_pairs", type=int, default=0,
+    p.add_argument("--max_fail_pairs", type=int, default=400,
                    help="cap on number of fail_vs_succ pairs to evaluate (0 = no cap)")
     p.add_argument("--max_new_tokens", type=int, default=8)
     p.add_argument("--seed", type=int, default=1234)
@@ -105,7 +113,6 @@ def _render_example_panel(ax_left, ax_right, ex, gen_text, pred_ans, correct, ta
     pred_str = f"{pred_ans}" if pred_ans is not None else f"<unparsed: {gen_text!r}>"
     ax_left.set_title("frame 1 (earlier label)", fontsize=8, color="#555555")
     ax_right.set_title("frame 2 (later label)", fontsize=8, color="#555555")
-    # Caption above the left axis with full info
     cap = (
         f"[{verdict}] GT={target_ans:+d}  Pred={pred_str}  "
         f"| {ex.get('bucket','?')}  | {ex.get('demo_id_exact','?')}"
@@ -134,7 +141,7 @@ def save_grid(records, out_path, title, max_cells):
     if not records:
         return
     n = min(len(records), max_cells)
-    n_cols = 2  # 2 examples per row -> 4 image axes per row
+    n_cols = 2
     n_rows = (n + n_cols - 1) // n_cols
     fig, axes = plt.subplots(n_rows, n_cols * 2, figsize=(5 * n_cols * 2, 3.6 * n_rows))
     if n_rows == 1:
@@ -191,8 +198,8 @@ def main():
     fail_idxs = parse_indices(args.failure_indices) if args.failure_indices else []
     intervals = [int(x) for x in args.compare_interval.split(",")]
 
-    successes = load_upright_bottle_demos(args.dataset_root, succ_idxs, "success")
-    failures = load_upright_bottle_demos(args.dataset_root, fail_idxs, "failure") if fail_idxs else []
+    successes = load_stacking_demos(args.dataset_root, succ_idxs, "success")
+    failures = load_stacking_demos(args.dataset_root, fail_idxs, "failure") if fail_idxs else []
 
     pairs = build_pairs_for_demos(
         successes, failures, intervals, args.sample_interval, task_token,
@@ -235,9 +242,9 @@ def main():
         max_pixels=mp_w * mp_h,
     )
 
-    buckets = {}  # bucket -> {correct, total, unparsed}
+    buckets = {}
     qualitative = []
-    records = []  # per-example records for visualization
+    records = []
 
     for i, ex in enumerate(pairs):
         try:
@@ -357,7 +364,6 @@ def main():
             json.dump(summary, fh, indent=2)
         logger.info(f"Wrote summary to {args.out_json}")
 
-    # ---- Visualizations ----
     viz_dir = Path(args.viz_dir) if args.viz_dir else Path(args.checkpoint) / "heldout_eval_viz"
     viz_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"Writing visualizations to {viz_dir}")
@@ -366,7 +372,6 @@ def main():
     wrong_recs = [r for r in records if (not r["correct"]) and r["pred_ans"] is not None]
     unparsed_recs = [r for r in records if r["pred_ans"] is None]
 
-    # Mixed sampling for the per-example PNGs: balance bucket + correctness
     rng2 = random.Random(args.seed + 1)
     by_key = defaultdict(list)
     for r in records:
@@ -403,8 +408,6 @@ def main():
 
     save_bucket_chart(buckets, viz_dir / "bucket_accuracy.png", summary["sign_acc_overall"])
 
-    # Dump every fail_vs_succ pair as its own PNG, grouped by verdict, so all
-    # failure/success comparisons can be inspected (not just the sampled mix).
     fvs_recs = [r for r in records if r["bucket"].startswith("fail_vs_succ")]
     fvs_dir = viz_dir / "fail_vs_succ"
     for verdict in ("ok", "wrong", "unparsed"):
@@ -422,7 +425,6 @@ def main():
         plt.close(fig)
     logger.info(f"Saved {len(fvs_recs)} fail_vs_succ per-pair PNGs under {fvs_dir}")
 
-    # Dump a per-example CSV-ish JSONL for easy grep/inspection
     with open(viz_dir / "predictions.jsonl", "w") as fh:
         for r in records:
             fh.write(json.dumps({

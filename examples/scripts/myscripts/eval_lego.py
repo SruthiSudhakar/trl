@@ -1,21 +1,29 @@
 """
-Held-out eval for UprightBottle SFT checkpoint.
+Held-out eval for PnPRedLegoToBrownBowl SFT checkpoint.
 
-Builds success-vs-success pairs from a heldout set of demo indices (default
-51-100, which were not in training or eval), runs model.generate, parses the
-signed integer answer, and reports sign accuracy overall + per bucket
-(interval x camera).
+Builds success-vs-success and failure-vs-success pairs from a heldout set of
+demo indices (default 17-20, which were not in training), runs model.generate,
+parses the signed integer answer, and reports sign accuracy overall + per
+bucket (interval / fail_vs_succ).
 
 Usage:
-CUDA_VISIBLE_DEVICES=1 python examples/scripts/myscripts/eval_upright_bottle.py \
---checkpoint /proj/vondrick3/sruthi/Appaji/trl/outputs/UprightBottle_20260513_183921/checkpoint-850 \
---success_indices 101-118,120-147 \
---failure_indices 101-118,120-147 \
---compare_interval 2,4,8,16 \
---max_succ_pairs 500 --max_fail_pairs 500 \
+CUDA_VISIBLE_DEVICES=2 python examples/scripts/myscripts/eval_lego.py \
+--checkpoint /proj/vondrick3/sruthi/Appaji/trl/outputs/PnPRedLegoToBrownBowl_20260516_121708_moredata_succ_only/checkpoint-1500 \
+--eval_failure_indices 1-20,302-320 \
+--eval_success_indices 1-20,302-320 \
+--compare_interval 4,8,12,16 \
+--max_succ_pairs 500 --max_fail_pairs 1000 \
 --max_pixels 960x540 \
---failure_last_frac 0.9
+--failure_last_frac 0.95
 
+CUDA_VISIBLE_DEVICES=3 python examples/scripts/myscripts/eval_lego.py \
+--checkpoint /proj/vondrick3/sruthi/Appaji/trl/outputs/PnPRedLegoToBrownBowl_20260508_220901_moredata_balance_si2/checkpoint-1000 \
+--eval_failure_indices 1-20,302-320 \
+--eval_success_indices 1-20,302-320 \
+--compare_interval 4,8,12,16 \
+--max_succ_pairs 500 --max_fail_pairs 1000 \
+--max_pixels 960x540 \
+--failure_last_frac 0.95
 """
 
 import argparse
@@ -33,11 +41,11 @@ import torch
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from sft_vlm_upright_bottle import (  # noqa: E402
-    SYSTEM_PROMPT,
-    USER_PROMPT_TEMPLATE,
+from sft_vlm_lego import (  # noqa: E402
+    LEGO_SYSTEM_PROMPT as SYSTEM_PROMPT,
+    LEGO_USER_PROMPT_TEMPLATE as USER_PROMPT_TEMPLATE,
     build_pairs_for_demos,
-    load_upright_bottle_demos,
+    load_lego_demos,
     parse_indices,
 )
 from sft_vlm_overlay_regression_v2 import TASK_TOKENS  # noqa: E402
@@ -52,15 +60,16 @@ SIGNED_INT_RE = re.compile(r"-?\d+")
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", required=True)
-    p.add_argument("--dataset_root", default="/proj/vondrick3/datasets/expert_data_jgd_UprightBottle")
-    p.add_argument("--task_name", default="UprightBottle")
-    p.add_argument("--success_indices", default="51-100")
-    p.add_argument("--failure_indices", default="",
-                   help="comma/range list of failure indices; default empty (no failures in 51-100)")
+    p.add_argument("--dataset_root", default="/proj/vondrick3/datasets/VLMjgd/PnPRedLegoToBrownBowl")
+    p.add_argument("--task_name", default="PnPRedLegoToBrownBowl")
+    p.add_argument("--eval_success_indices", default="17-20",
+                   help="comma/range list of success demo indices to evaluate")
+    p.add_argument("--eval_failure_indices", default="17-20",
+                   help="comma/range list of failure demo indices to evaluate")
     p.add_argument("--compare_interval", default="4,8,12,16")
     p.add_argument("--sample_interval", type=int, default=4,
                    help="step through subsampled frames when building pairs")
-    p.add_argument("--failure_last_frac", type=float, default=0.90)
+    p.add_argument("--failure_last_frac", type=float, default=0.50)
     p.add_argument("--failure_min_frames", type=int, default=8)
     p.add_argument("--max_pixels", default="960x540",
                    help="WxH, matches training max_pixels")
@@ -105,7 +114,6 @@ def _render_example_panel(ax_left, ax_right, ex, gen_text, pred_ans, correct, ta
     pred_str = f"{pred_ans}" if pred_ans is not None else f"<unparsed: {gen_text!r}>"
     ax_left.set_title("frame 1 (earlier label)", fontsize=8, color="#555555")
     ax_right.set_title("frame 2 (later label)", fontsize=8, color="#555555")
-    # Caption above the left axis with full info
     cap = (
         f"[{verdict}] GT={target_ans:+d}  Pred={pred_str}  "
         f"| {ex.get('bucket','?')}  | {ex.get('demo_id_exact','?')}"
@@ -134,7 +142,7 @@ def save_grid(records, out_path, title, max_cells):
     if not records:
         return
     n = min(len(records), max_cells)
-    n_cols = 2  # 2 examples per row -> 4 image axes per row
+    n_cols = 2
     n_rows = (n + n_cols - 1) // n_cols
     fig, axes = plt.subplots(n_rows, n_cols * 2, figsize=(5 * n_cols * 2, 3.6 * n_rows))
     if n_rows == 1:
@@ -187,12 +195,12 @@ def main():
         raise ValueError(f"Unknown task '{args.task_name}'. Add it to TASK_TOKENS.")
     task_token = TASK_TOKENS[args.task_name]
 
-    succ_idxs = parse_indices(args.success_indices)
-    fail_idxs = parse_indices(args.failure_indices) if args.failure_indices else []
+    succ_idxs = parse_indices(args.eval_success_indices)
+    fail_idxs = parse_indices(args.eval_failure_indices) if args.eval_failure_indices else []
     intervals = [int(x) for x in args.compare_interval.split(",")]
 
-    successes = load_upright_bottle_demos(args.dataset_root, succ_idxs, "success")
-    failures = load_upright_bottle_demos(args.dataset_root, fail_idxs, "failure") if fail_idxs else []
+    successes = load_lego_demos(args.dataset_root, succ_idxs, "success")
+    failures = load_lego_demos(args.dataset_root, fail_idxs, "failure") if fail_idxs else []
 
     pairs = build_pairs_for_demos(
         successes, failures, intervals, args.sample_interval, task_token,
@@ -311,25 +319,25 @@ def main():
     correct = sum(b["correct"] for b in buckets.values())
     unparsed = sum(b["unparsed"] for b in buckets.values())
 
-    def _agg(suffix):
-        cs = [b for k, b in buckets.items() if k.endswith(suffix)]
+    def _agg(predicate):
+        cs = [b for k, b in buckets.items() if predicate(k)]
         tot = sum(b["total"] for b in cs)
         cor = sum(b["correct"] for b in cs)
         unp = sum(b["unparsed"] for b in cs)
         return cor / max(tot, 1), unp / max(tot, 1), tot
 
-    cam0_acc, cam0_unp, cam0_n = _agg("_cam0")
-    cam1_acc, cam1_unp, cam1_n = _agg("_cam1")
+    svs_acc, svs_unp, svs_n = _agg(lambda k: k.startswith("succ_vs_succ"))
+    fvs_acc, fvs_unp, fvs_n = _agg(lambda k: k.startswith("fail_vs_succ"))
 
     summary = {
         "checkpoint": args.checkpoint,
-        "success_indices": args.success_indices,
-        "failure_indices": args.failure_indices,
+        "eval_success_indices": args.eval_success_indices,
+        "eval_failure_indices": args.eval_failure_indices,
         "n_evaluated": total,
         "sign_acc_overall": correct / max(total, 1),
         "unparsed_overall": unparsed / max(total, 1),
-        "sign_acc_cam0": cam0_acc, "unparsed_cam0": cam0_unp, "n_cam0": cam0_n,
-        "sign_acc_cam1": cam1_acc, "unparsed_cam1": cam1_unp, "n_cam1": cam1_n,
+        "sign_acc_succ_vs_succ": svs_acc, "unparsed_succ_vs_succ": svs_unp, "n_succ_vs_succ": svs_n,
+        "sign_acc_fail_vs_succ": fvs_acc, "unparsed_fail_vs_succ": fvs_unp, "n_fail_vs_succ": fvs_n,
         "per_bucket": {
             k: {
                 "sign_acc": v["correct"] / max(v["total"], 1),
@@ -343,10 +351,10 @@ def main():
 
     logger.info("=" * 60)
     logger.info(f"Held-out eval results (n={total})")
-    logger.info(f"  sign_acc_overall: {summary['sign_acc_overall']:.4f}")
-    logger.info(f"  unparsed_overall: {summary['unparsed_overall']:.4f}")
-    logger.info(f"  sign_acc_cam0:    {cam0_acc:.4f}  (n={cam0_n})")
-    logger.info(f"  sign_acc_cam1:    {cam1_acc:.4f}  (n={cam1_n})")
+    logger.info(f"  sign_acc_overall:      {summary['sign_acc_overall']:.4f}")
+    logger.info(f"  unparsed_overall:      {summary['unparsed_overall']:.4f}")
+    logger.info(f"  sign_acc_succ_vs_succ: {svs_acc:.4f}  (n={svs_n})")
+    logger.info(f"  sign_acc_fail_vs_succ: {fvs_acc:.4f}  (n={fvs_n})")
     logger.info("  per-bucket:")
     for k, v in summary["per_bucket"].items():
         logger.info(f"    {k:32s}  acc={v['sign_acc']:.4f}  unparsed={v['unparsed']:.4f}  n={v['n']}")
@@ -361,6 +369,11 @@ def main():
     viz_dir = Path(args.viz_dir) if args.viz_dir else Path(args.checkpoint) / "heldout_eval_viz"
     viz_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"Writing visualizations to {viz_dir}")
+
+    # Also write the summary JSON inside viz_dir for convenience.
+    with open(viz_dir / "summary.json", "w") as fh:
+        json.dump(summary, fh, indent=2)
+    logger.info(f"Wrote summary to {viz_dir / 'summary.json'}")
 
     correct_recs = [r for r in records if r["correct"]]
     wrong_recs = [r for r in records if (not r["correct"]) and r["pred_ans"] is not None]
@@ -403,8 +416,7 @@ def main():
 
     save_bucket_chart(buckets, viz_dir / "bucket_accuracy.png", summary["sign_acc_overall"])
 
-    # Dump every fail_vs_succ pair as its own PNG, grouped by verdict, so all
-    # failure/success comparisons can be inspected (not just the sampled mix).
+    # Dump every fail_vs_succ pair as its own PNG, grouped by verdict.
     fvs_recs = [r for r in records if r["bucket"].startswith("fail_vs_succ")]
     fvs_dir = viz_dir / "fail_vs_succ"
     for verdict in ("ok", "wrong", "unparsed"):
@@ -422,7 +434,7 @@ def main():
         plt.close(fig)
     logger.info(f"Saved {len(fvs_recs)} fail_vs_succ per-pair PNGs under {fvs_dir}")
 
-    # Dump a per-example CSV-ish JSONL for easy grep/inspection
+    # Dump a per-example JSONL for easy grep/inspection.
     with open(viz_dir / "predictions.jsonl", "w") as fh:
         for r in records:
             fh.write(json.dumps({
