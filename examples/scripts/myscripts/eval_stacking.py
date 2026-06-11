@@ -7,21 +7,12 @@ in launch_stacking.sh), runs model.generate, parses the signed integer answer,
 and reports sign accuracy overall + per bucket (interval x camera).
 
 Usage:
-CUDA_VISIBLE_DEVICES=1 python examples/scripts/myscripts/eval_stacking.py \
---checkpoint /proj/vondrick3/sruthi/Appaji/trl/outputs/Stacking_20260520_150251/checkpoint-800 \
---success_indices 48-50 \
---failure_indices 48-50 \
---compare_interval 3,4,8,12,16 \
---max_succ_pairs 500 --max_fail_pairs 500 \
---max_pixels 960x540 \
---failure_last_frac 0.95
-
 CUDA_VISIBLE_DEVICES=2 python examples/scripts/myscripts/eval_stacking.py \
 --checkpoint /proj/vondrick3/sruthi/Appaji/trl/outputs/Stacking_20260520_155659_848x480/checkpoint-750 \
 --success_indices 48-50 \
 --failure_indices 48-50 \
 --compare_interval 3,4,8,12,16 \
---max_succ_pairs 500 --max_fail_pairs 500 \
+--max_succ_pairs 2000 --max_fail_pairs 2000 \
 --max_pixels 848x480 \
 --failure_last_frac 0.95
 """

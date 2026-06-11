@@ -9,6 +9,7 @@ Supports two source types:
 import hashlib
 import os
 import tempfile
+from collections import OrderedDict
 from functools import lru_cache
 import pdb
 from PIL import Image
@@ -16,11 +17,38 @@ from PIL import Image
 _S3_VIDEO_CACHE_DIR = os.path.join(tempfile.gettempdir(), "video_s3_cache")
 
 
-@lru_cache(maxsize=256)
+# Reader cache keyed by (pid, path). decord's FFmpeg state is NOT fork-safe:
+# accessing a VideoReader that was opened in a parent process and inherited by a
+# forked child segfaults. Keying on os.getpid() guarantees every process (main,
+# train workers, eval workers) opens its own reader and never touches one
+# inherited across a fork. The inherited objects still sit in the child's copy
+# of the dict but are never accessed, so they cause no harm.
+#
+# Bounded LRU: every distinct video path holds an open file descriptor inside
+# its VideoReader. A training loop reuses a fixed set of paths, but a
+# long-running server (e.g. rank_serve_robocasa.py) sees an unbounded stream of
+# unique rollout videos, so an unbounded cache leaks fds until the process hits
+# EMFILE ("Too many open files"). Capping the cache evicts the
+# least-recently-used reader; dropping the last reference lets decord close its
+# underlying fd(s) on __del__.
+_VIDEO_READER_CACHE_MAX = 64
+_video_reader_cache = OrderedDict()
+
+
 def _get_video_reader(video_path: str):
-    """Cache decord.VideoReader objects to avoid re-opening files."""
+    """Return a process-local decord.VideoReader, opening it on first use."""
     import decord
-    return decord.VideoReader(video_path, num_threads=1)
+    key = (os.getpid(), video_path)
+    vr = _video_reader_cache.get(key)
+    if vr is None:
+        vr = decord.VideoReader(video_path, num_threads=1)
+        _video_reader_cache[key] = vr
+        while len(_video_reader_cache) > _VIDEO_READER_CACHE_MAX:
+            _, evicted = _video_reader_cache.popitem(last=False)
+            del evicted  # drop ref so decord closes the underlying fd(s)
+    else:
+        _video_reader_cache.move_to_end(key)  # mark most-recently-used
+    return vr
 
 
 def extract_frame(source_path: str, frame_idx: int) -> Image.Image:
