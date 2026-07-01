@@ -3,9 +3,9 @@
 # Generalizable: set TASK to any task present in PRETRAIN_ROOT's rollout subdirs.
 #
 #   conda activate vlmoverlay
-#   bash examples/scripts/myscripts/launch_robocasa.sh
+#   bash examples/scripts/robocasa_vlm/launch_robocasa.sh
 #   # or retarget to another task:
-#   TASK=CloseFridge bash examples/scripts/myscripts/launch_robocasa.sh
+#   TASK=CloseFridge bash examples/scripts/robocasa_vlm/launch_robocasa.sh
 #
 # Single camera per episode (one mp4 per rollout). Pairs that share an initial
 # condition are matched by episode index across rollouts. The last
@@ -64,7 +64,7 @@ PRETRAIN_ROOT="/proj/vondrick3/sruthi/Appaji/released_checkpoints_groot/gr00t_n1
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch \
 --num_processes=8 --gpu_ids=0,1,2,3,4,5,6,7 \
 --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
-examples/scripts/myscripts/sft_vlm_robocasa.py \
+examples/scripts/robocasa_vlm/sft_vlm_robocasa.py \
 --model_name_or_path /proj/vondrick3/sruthi/robots/sruthi_dreamitate/pretrained_vlms/Qwen2.5-VL-3B-Instruct/ \
 --attn_implementation flash_attention_2 \
 --pretrain_root "$PRETRAIN_ROOT" \

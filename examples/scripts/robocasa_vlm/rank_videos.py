@@ -52,9 +52,54 @@ import torch
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from sft_vlm_lego import LEGO_SYSTEM_PROMPT, LEGO_USER_PROMPT_TEMPLATE  # noqa: E402
-from sft_vlm_overlay_regression_v2 import TASK_TOKENS  # noqa: E402
 from video_frame_utils import _get_video_reader, extract_frame  # noqa: E402
+
+LEGO_SYSTEM_PROMPT = (
+    "Compare robot task progress. You will see two images. "
+    "Respond with a number: positive if the second image shows more progress, "
+    "negative if the first does."
+)
+LEGO_USER_PROMPT_TEMPLATE = (
+    "Task: {task_token}\n"
+    "Which image shows more task progress (the first or the second)? "
+    "Respond with a number from -100 to 100."
+)
+
+TASK_TOKENS = {
+    "PnPCounterToCab": "[COUNTER_TO_CAB]",
+    "PnPCabToCounter": "[CAB_TO_COUNTER]",
+    "PnPCounterToMicrowave": "[COUNTER_TO_MICROWAVE]",
+    "PnPMicrowaveToCounter": "[MICROWAVE_TO_COUNTER]",
+    "PnPStoveToCounter": "[STOVE_TO_COUNTER]",
+    "PnPCounterToStove": "[COUNTER_TO_STOVE]",
+    "PnPCounterToSink": "[COUNTER_TO_SINK]",
+    "PnPSinkToCounter": "[SINK_TO_COUNTER]",
+    "PnPCoffeeServeMug": "[COFFEE_SERVE_MUG]",
+    "PnPRedLegoToBrownBowl": "[PNP_RED_LEGO_TO_BROWN_BOWL]",
+    "CoffeeServeMug": "[COFFEE_SERVE_MUG]",
+    "PnPCloseDrawer": "[CLOSE_DRAWER]",
+    "CoffeeSetupMug": "[COFFEE_SETUP_MUG]",
+    "CoffeePressButton": "[COFFEE_PRESS_BUTTON]",
+    "CloseDrawer": "[CLOSE_DRAWER]",
+    "OpenDrawer": "[OPEN_DRAWER]",
+    "CloseSingleDoor": "[CLOSE_SINGLE_DOOR]",
+    "CloseDoubleDoor": "[CLOSE_DOUBLE_DOOR]",
+    "OpenDoubleDoor": "[OPEN_DOUBLE_DOOR]",
+    "OpenSingleDoor": "[OPEN_SINGLE_DOOR]",
+    "TurnSinkSpout": "[TURN_SINK_SPOUT]",
+    "PutKiwiInCenterOfTable": "[PUT_KIWI_IN_CENTER_OF_TABLE]",
+    "PushCoasterToMug": "[PUSH_COASTER_TO_MUG]",
+    "TurnMugRightsideUp": "[TURN_MUG_RIGHTSIDE_UP]",
+    "BimanualBikeRotorInstall": "[BIKE_ROTOR_INSTALL]",
+    "BimanualClearKitchenCounter": "[CLEAR_KITCHEN_COUNTER]",
+    "BimanualSetUpBreakfastTable": "[SETUP_BREAKFAST_TABLE]",
+    "CleanLitterBox": "[CLEAN_LITTERBOX]",
+    "CutAppleIntoSlices": "[CUT_APPLE]",
+    "UprightBottle": "[UPRIGHT_BOTTLE]",
+    "BagPlate": "[BAG_PLATE]",
+    "PushBowl": "[PUSH_BOWL]",
+    "Stacking": "[STACKING]",
+}
 
 logging.basicConfig(
     level=logging.INFO,
