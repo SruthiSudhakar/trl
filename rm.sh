@@ -1,1 +1,0 @@
-find outputs/realworld_all_20260223_162917 -maxdepth 1 -type d -name "checkpoint-*" ! -name "checkpoint-3800" -exec rm -rf {} +./

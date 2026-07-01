@@ -27,19 +27,39 @@
 #   ├───────────────────────────┼───────────────┤
 #   │ 16                        │ 1.6 s         │
 #   └───────────────────────────┴───────────────┘
-
+#   The two frames in a success pair are 0.3 / 0.4 / 0.8 / 1.2 / 1.6 seconds apart respectively
 set -e
+source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate vlmoverlay
 
-cd /proj/vondrick3/sruthi/Appaji/trl
-PackDessert - cv13
-PickPlaceCounterToDrawer - cv12
-PickPlaceToasterOvenToCounter - cv11
-TurnOnToaster
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TRL_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+cd "$TRL_ROOT"
 
 # --- Configure here -----------------------------------------------------------
-TASK="PickPlaceToasterOvenToCounter"
-PRETRAIN_ROOT="/proj/vondrick3/sruthi/Appaji/robocasa_diffusion_policy/released_checkpoints/diffusion_policy/17.40.09_train_diffusion_transformer_hybrid_pretrain_human300/evals/epoch=1400-test_mean_score=-1.000/pretrain"
+# Multi-task: list one or more tasks; the script builds pairs WITHIN each task
+# and concats. Per-video language descriptions are pulled from each rollout
+# dir's recovered_lang.json (falls back to a CamelCase-split if missing).
+TASKS=(
+    "CloseBlenderLid"
+    "CloseFridge"
+    "CloseToasterOvenDoor"
+    "CoffeeSetupMug"
+    "OpenCabinet"
+    "OpenDrawer"
+    "OpenStandMixerHead"
+    "PickPlaceCounterToCabinet"
+    "PickPlaceCounterToStove"
+    "PickPlaceDrawerToCounter"
+    "PickPlaceSinkToCounter"
+    "PickPlaceToasterToCounter"
+    "SlideDishwasherRack"
+    "TurnOffStove"
+    "TurnOnElectricKettle"
+    "TurnOnMicrowave"
+    "TurnOnSinkFaucet"
+)
+PRETRAIN_ROOT="/proj/vondrick3/sruthi/Appaji/released_checkpoints_groot/gr00t_n1-5/multitask_learning/checkpoint-120000/evals/pretrain"
 
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch \
 --num_processes=8 --gpu_ids=0,1,2,3,4,5,6,7 \
@@ -48,26 +68,26 @@ examples/scripts/myscripts/sft_vlm_robocasa.py \
 --model_name_or_path /proj/vondrick3/sruthi/robots/sruthi_dreamitate/pretrained_vlms/Qwen2.5-VL-3B-Instruct/ \
 --attn_implementation flash_attention_2 \
 --pretrain_root "$PRETRAIN_ROOT" \
---task "$TASK" \
+--task "${TASKS[@]}" \
 --num_eval_episodes 8 \
---output_dir "outputs/${TASK}_$(date +%Y%m%d_%H%M%S)_robocasa" \
+--output_dir "outputs/multitask_$(date +%Y%m%d_%H%M%S)_robocasa" \
 --eval_strategy steps \
---logging_steps 10 \
---eval_steps 100 \
---save_steps 100 \
---gradient_accumulation_steps 2 \
---num_train_epochs 25 \
---learning_rate 1e-5 \
---per_device_train_batch_size 4 \
+--logging_steps 100 \
+--eval_steps 200 \
+--save_steps 200 \
+--num_train_epochs 100 \
+--learning_rate 1.5e-5 \
+--per_device_train_batch_size 12 \
 --per_device_eval_batch_size 4 \
+--gradient_accumulation_steps 2 \
 --compare_interval 4,8,12,16 \
---train_sample_interval 2 \
+--train_sample_interval 4 \
 --failure_last_frac 0.95 \
 --failure_min_frames 8 \
 --max_succ_per_fail 1 \
 --subsample 1 \
 --eval_max_pairs 100 \
 --report_to wandb \
---warmup_ratio 0.05 \
+--warmup_steps 200 \
 --max_pixels 848x480 \
 --balance_fail_vs_succ True

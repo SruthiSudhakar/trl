@@ -40,9 +40,10 @@ import os
 import random
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from collections import Counter
+from typing import List
 
 import torch
 from datasets import Dataset
@@ -71,6 +72,14 @@ from sft_vlm_stacking import (  # noqa: E402
     TwoImageCollator,
 )
 from video_frame_utils import find_job_dirs  # noqa: E402
+
+# For multi-task training we want a per-video natural-language description in
+# the prompt. PairwiseSignAccuracyCallback re-renders the user text at eval
+# time from the imported USER_PROMPT_TEMPLATE (single {task_token} slot), so
+# rather than override the template (which would diverge at eval), we fold the
+# description into the same task_token slot: each row stores
+#     task_token = "[CURATED_TOKEN] — natural-language description"
+# and both train and eval render identical text via the existing template.
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -108,12 +117,30 @@ def video_num_frames(path: str) -> int:
         return 0
 
 
-def load_rollout_demos(pretrain_root: str, task: str) -> dict:
+def load_recovered_lang(rollout_dir: str) -> dict:
+    """Read recovered_lang.json sitting next to eval_log.json.
+    Returns {video_basename: lang_text}. Empty dict if missing/unreadable."""
+    path = os.path.join(rollout_dir, "recovered_lang.json")
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+    except Exception as e:
+        logger.warning(f"Could not read {path}: {e}")
+        return {}
+    return {k: v.get("lang", "") for k, v in data.items() if isinstance(v, dict)}
+
+
+def load_rollout_demos(pretrain_root: str, task: str):
     """Scan every rollout subdir for `task` and group videos by episode index
-    (= initial condition). Returns {ep: {"succ": [mp4...], "fail": [mp4...]}}."""
+    (= initial condition). Returns a (by_ep, lang_by_path) tuple where
+    by_ep = {ep: {"succ": [mp4...], "fail": [mp4...]}} and
+    lang_by_path = {mp4_path: natural-language description} pulled from each
+    rollout dir's recovered_lang.json."""
     dirs = find_job_dirs(pretrain_root)
-    by_ep = {}
-    n_succ = n_fail = n_dirs = n_corrupt = 0
+    by_ep, lang_by_path = {}, {}
+    n_succ = n_fail = n_dirs = n_corrupt = n_lang = 0
     for d in dirs:
         log_path = os.path.join(d, "eval_log.json")
         try:
@@ -125,11 +152,13 @@ def load_rollout_demos(pretrain_root: str, task: str) -> dict:
         if log.get("eval_args", {}).get("task") != task:
             continue
         n_dirs += 1
+        lang_in_dir = load_recovered_lang(d)
         for k, v in log.items():
             if not k.startswith("test/sim_max_reward_"):
                 continue
             ep = int(k.rsplit("_", 1)[1])
-            vpath = os.path.join(d, "media", f"seed{ep}.mp4")
+            vname = f"seed{ep}.mp4"
+            vpath = os.path.join(d, "media", vname)
             if not os.path.isfile(vpath):
                 logger.warning(f"Missing video {vpath}, skipping")
                 continue
@@ -145,14 +174,19 @@ def load_rollout_demos(pretrain_root: str, task: str) -> dict:
             else:
                 slot["fail"].append(vpath)
                 n_fail += 1
+            lang = lang_in_dir.get(vname)
+            if lang:
+                lang_by_path[vpath] = lang
+                n_lang += 1
     pairable = sum(1 for s in by_ep.values() if s["succ"] and s["fail"])
     logger.info(
         f"[{task}] {n_dirs} rollout dirs -> {len(by_ep)} initial conditions; "
         f"{n_succ} success videos, {n_fail} failure videos, "
         f"{n_corrupt} corrupt videos skipped, "
-        f"{pairable} pairable initial conditions (have both succ & fail)"
+        f"{pairable} pairable initial conditions (have both succ & fail); "
+        f"{n_lang} videos with recovered lang"
     )
-    return by_ep
+    return by_ep, lang_by_path
 
 
 def build_rollout_pairs(
@@ -162,6 +196,8 @@ def build_rollout_pairs(
     train_step,
     task_token,
     task_name,
+    lang_by_path,
+    fallback_desc,
     failure_last_frac,
     failure_min_frames,
     max_succ_per_fail,
@@ -171,13 +207,20 @@ def build_rollout_pairs(
 ):
     """Build success-vs-success and failure-vs-success pairs for the given
     episode indices. Single camera; bucket names end in "_cam0" so the existing
-    PairwiseSignAccuracyCallback per-camera aggregation works unchanged."""
+    PairwiseSignAccuracyCallback per-camera aggregation works unchanged. Each
+    pair's user-prompt carries the natural-language description for video_1
+    (with v2 / fallback as backstop), so the model can disambiguate tasks in
+    multi-task training."""
     rng = rng or random.Random(42)
-    user_prompt = USER_PROMPT_TEMPLATE.format(task_token=task_token)
     out = []
     CAM = "cam0"
 
     def emit(v1, f1, v2, f2, ans, kind, demo_id, bucket):
+        desc = lang_by_path.get(v1) or lang_by_path.get(v2) or fallback_desc
+        # Fold the description into the same task_token slot the eval callback
+        # reads, so train and eval render identical user text.
+        combined_token = f"{task_token} — {desc}"
+        user_prompt = USER_PROMPT_TEMPLATE.format(task_token=combined_token)
         out.append({
             "video_path_1": v1, "frame_idx_1": f1,
             "video_path_2": v2, "frame_idx_2": f2,
@@ -194,10 +237,13 @@ def build_rollout_pairs(
             "demo_id": demo_id,
             "demo_id_exact": f"{kind}_{demo_id}",
             "demo_success": kind,
-            "bucket": bucket,
+            "bucket": f"{task_name}_{bucket}",
             "camera": CAM,
             "job_name": task_name,
-            "task_token": task_token,
+            "task_token": combined_token,
+            "task_token_pure": task_token,
+            "task_name": task_name,
+            "task_description": desc,
         })
 
     # success-vs-success: later sub-frame from the same success video = more progress.
@@ -262,7 +308,9 @@ def build_rollout_pairs(
 @dataclass
 class RolloutArgs:
     pretrain_root: str = DEFAULT_PRETRAIN_ROOT
-    task: str = "CloseToasterOvenDoor"
+    # List[str] -> HfArgumentParser uses nargs="+", so the CLI is
+    # `--task TaskA TaskB TaskC ...` (single task still works).
+    task: List[str] = field(default_factory=lambda: ["CloseToasterOvenDoor"])
     num_eval_episodes: int = 10  # held-out initial conditions (with successes) for eval
     compare_interval: str = "5,10,20,40"
     train_sample_interval: int = 4
@@ -290,67 +338,105 @@ if __name__ == "__main__":
     training_args.completion_only_loss = True
 
     intervals = [int(x) for x in cfg.compare_interval.split(",")]
-    task_token = task_token_for(cfg.task)
-    logger.info(f"Task '{cfg.task}' -> token {task_token}")
 
-    by_ep = load_rollout_demos(cfg.pretrain_root, cfg.task)
-    episodes_all = sorted(by_ep.keys())
-    succ_eps = [e for e in episodes_all if by_ep[e]["succ"]]
-    if not succ_eps:
-        raise ValueError(
-            f"No successful rollouts for task '{cfg.task}' under {cfg.pretrain_root}; "
-            f"cannot build training pairs."
+    # Multi-task: build pairs per-task, then concat. by_ep is rebuilt per task so
+    # pairs are always within a single task by construction (no cross-task pairs).
+    # When --balance_fail_vs_succ is set, balance is applied INSIDE the loop so
+    # every task contributes equal succ-vs-succ and fail-vs-succ counts (a global
+    # balance would let tasks with more failures dominate the fail share).
+    train_pairs, eval_pairs = [], []
+    train_rng = random.Random(42)
+    eval_rng = random.Random(43)
+    balance_rng = random.Random(44) if cfg.balance_fail_vs_succ else None
+    for task in cfg.task:
+        task_token = task_token_for(task)
+        # Fallback description if a video isn't in recovered_lang.json: split
+        # CamelCase task name into lowercase words ("PackDessert" -> "pack dessert").
+        fallback_desc = re.sub(r"(?<!^)(?=[A-Z])", " ", task).lower()
+        logger.info(
+            f"[{task}] token={task_token}  fallback_desc='{fallback_desc}'"
         )
 
-    # Hold out the last num_eval_episodes PAIRABLE initial conditions (those with
-    # both a success and a failure) so eval always has succ_vs_succ AND fail_vs_succ
-    # pairs. Train/eval episode sets are disjoint by construction.
-    pair_eps = [e for e in episodes_all if by_ep[e]["succ"] and by_ep[e]["fail"]]
-    n_eval = min(cfg.num_eval_episodes, max(0, len(pair_eps) - 1))
-    eval_eps = set(pair_eps[-n_eval:]) if n_eval > 0 else set()
-    train_eps = [e for e in episodes_all if e not in eval_eps]
-    eval_eps_list = sorted(eval_eps)
-    if not eval_eps_list:
-        logger.warning(
-            f"No held-out eval initial conditions for task '{cfg.task}' "
-            f"(pairable={len(pair_eps)}); training without an eval split."
-        )
-    logger.info(
-        f"Episode split -> train: {len(train_eps)} initial conditions, "
-        f"eval: {len(eval_eps_list)} initial conditions ({eval_eps_list})"
-    )
-
-    train_pairs = build_rollout_pairs(
-        by_ep, train_eps, intervals, cfg.train_sample_interval, task_token, cfg.task,
-        cfg.failure_last_frac, cfg.failure_min_frames, cfg.max_succ_per_fail,
-        cfg.subsample, video_skip_frac=cfg.video_skip_frac, rng=random.Random(42),
-    )
-    eval_pairs = build_rollout_pairs(
-        by_ep, eval_eps_list, intervals, cfg.train_sample_interval, task_token, cfg.task,
-        cfg.failure_last_frac, cfg.failure_min_frames, cfg.max_succ_per_fail,
-        cfg.subsample, video_skip_frac=cfg.video_skip_frac, rng=random.Random(43),
-    )
-    logger.info(f"Pair counts -> train: {len(train_pairs)}, eval: {len(eval_pairs)}")
-
-    if cfg.balance_fail_vs_succ:
-        succ_p = [p for p in train_pairs if not p["bucket"].startswith("fail_vs_succ")]
-        fail_p = [p for p in train_pairs if p["bucket"].startswith("fail_vs_succ")]
-        if fail_p and succ_p:
-            reps = len(succ_p) // len(fail_p)
-            remainder = len(succ_p) - reps * len(fail_p)
-            balance_rng = random.Random(44)
-            balanced_fail = fail_p * reps + balance_rng.sample(fail_p, remainder)
-            train_pairs = succ_p + balanced_fail
-            balance_rng.shuffle(train_pairs)
-            logger.info(
-                f"Balanced fail_vs_succ: {len(fail_p)} unique -> {len(balanced_fail)} "
-                f"to match {len(succ_p)} succ_vs_succ; new train total: {len(train_pairs)}"
+        by_ep, lang_by_path = load_rollout_demos(cfg.pretrain_root, task)
+        if not by_ep:
+            logger.warning(f"[{task}] no rollouts found, skipping")
+            continue
+        episodes_all = sorted(by_ep.keys())
+        if not any(by_ep[e]["succ"] for e in episodes_all):
+            raise ValueError(
+                f"No successful rollouts for task '{task}' under {cfg.pretrain_root}; "
+                f"cannot build training pairs."
             )
-        else:
-            logger.warning("balance_fail_vs_succ requested but one bucket is empty; skipping.")
 
-    train_demos = {(p["demo_success"], p["demo_id"]) for p in train_pairs}
-    eval_demos = {(p["demo_success"], p["demo_id"]) for p in eval_pairs}
+        # Hold out the last num_eval_episodes PAIRABLE initial conditions per task.
+        pair_eps = [e for e in episodes_all if by_ep[e]["succ"] and by_ep[e]["fail"]]
+        n_eval = min(cfg.num_eval_episodes, max(0, len(pair_eps) - 1))
+        eval_eps = set(pair_eps[-n_eval:]) if n_eval > 0 else set()
+        train_eps = [e for e in episodes_all if e not in eval_eps]
+        eval_eps_list = sorted(eval_eps)
+        if not eval_eps_list:
+            logger.warning(
+                f"No held-out eval initial conditions for task '{task}' "
+                f"(pairable={len(pair_eps)}); training without an eval split."
+            )
+        logger.info(
+            f"[{task}] split -> train: {len(train_eps)} initial conditions, "
+            f"eval: {len(eval_eps_list)} initial conditions ({eval_eps_list})"
+        )
+
+        task_train_pairs = build_rollout_pairs(
+            by_ep, train_eps, intervals, cfg.train_sample_interval,
+            task_token, task, lang_by_path, fallback_desc,
+            cfg.failure_last_frac, cfg.failure_min_frames, cfg.max_succ_per_fail,
+            cfg.subsample, video_skip_frac=cfg.video_skip_frac, rng=train_rng,
+        )
+        task_eval_pairs = build_rollout_pairs(
+            by_ep, eval_eps_list, intervals, cfg.train_sample_interval,
+            task_token, task, lang_by_path, fallback_desc,
+            cfg.failure_last_frac, cfg.failure_min_frames, cfg.max_succ_per_fail,
+            cfg.subsample, video_skip_frac=cfg.video_skip_frac, rng=eval_rng,
+        )
+
+        if cfg.balance_fail_vs_succ:
+            # Per-task balance: upsample fail-vs-succ pairs to match
+            # succ-vs-succ count within THIS task only.
+            succ_p = [p for p in task_train_pairs if p["demo_success"] != "failure"]
+            fail_p = [p for p in task_train_pairs if p["demo_success"] == "failure"]
+            if fail_p and succ_p:
+                reps = len(succ_p) // len(fail_p)
+                remainder = len(succ_p) - reps * len(fail_p)
+                balanced_fail = fail_p * reps + balance_rng.sample(fail_p, remainder)
+                task_train_pairs = succ_p + balanced_fail
+                logger.info(
+                    f"[{task}] Balanced fail_vs_succ: {len(fail_p)} unique -> "
+                    f"{len(balanced_fail)} to match {len(succ_p)} succ_vs_succ; "
+                    f"task train total: {len(task_train_pairs)}"
+                )
+            else:
+                logger.warning(
+                    f"[{task}] balance_fail_vs_succ requested but one bucket is "
+                    f"empty (succ={len(succ_p)}, fail={len(fail_p)}); skipping."
+                )
+
+        train_pairs += task_train_pairs
+        eval_pairs += task_eval_pairs
+    logger.info(
+        f"Pair counts -> train: {len(train_pairs)}, eval: {len(eval_pairs)} "
+        f"across {len(cfg.task)} tasks ({list(cfg.task)})"
+    )
+    if not train_pairs:
+        raise ValueError(
+            f"No training pairs built across tasks {list(cfg.task)} under "
+            f"{cfg.pretrain_root}; check task names and rollout layout."
+        )
+
+    # (balance_fail_vs_succ is applied per-task inside the loop above so each
+    # task's succ/fail counts are matched independently; no global step here.)
+
+    # Key on task_name too: the same episode index can legitimately appear in
+    # different tasks, but train/eval must still be disjoint within each task.
+    train_demos = {(p["task_name"], p["demo_success"], p["demo_id"]) for p in train_pairs}
+    eval_demos = {(p["task_name"], p["demo_success"], p["demo_id"]) for p in eval_pairs}
     overlap = train_demos & eval_demos
     if overlap:
         raise RuntimeError(f"Train/eval initial-condition overlap detected: {overlap}")
@@ -389,7 +475,11 @@ if __name__ == "__main__":
         sys.exit(0)
 
     train_ds = Dataset.from_list(train_pairs)
-    eval_ds = Dataset.from_list(eval_pairs) if eval_pairs and training_args.eval_strategy != "no" else None
+    # HF's eval loop iterates the full eval_ds to compute eval_loss every
+    # eval_steps. Our real metric (eval_sign_acc_overall) comes from the
+    # PairwiseSignAccuracyCallback, which already subsamples to eval_max_pairs.
+    # Cap eval_ds at 500 so eval_loss is cheap; eval_pairs was shuffled above.
+    eval_ds = Dataset.from_list(eval_pairs[:500]) if eval_pairs and training_args.eval_strategy != "no" else None
     del train_pairs, eval_pairs
     gc.collect()
     logger.info(f"Train {len(train_ds)} / Eval {len(eval_ds) if eval_ds else 0}")
